@@ -21,12 +21,12 @@ def _weight_ptns(seq1: Seq, seq2: Seq, rows: numpy.ndarray, max_window: int):
     min_subst = min(substmatrix.values())
     max_subst = max(substmatrix.values()) + abs(min_subst)
     sneath = SubstitutionMatrix.dict_from_str(SNEATH)
-    min_sneath = min(substmatrix.values())
-    max_sneath = max(substmatrix.values())-min_sneath
+    min_sneath = min(sneath.values())
+    max_sneath = max(sneath.values())-min_sneath
     for aa1, aa2 in total_aa_combines:
 
-        color_by_subst = round((substmatrix[aa1, aa2]+abs(min_subst))*max_window/max_subst)
-        color_by_sneath = round((sneath.get((aa1, aa2), min_sneath)-min_sneath)*max_window/(max_sneath))
+        color_by_subst = min(max_window, max(0, round((substmatrix[aa1, aa2]+abs(min_subst))*max_window/max_subst)))
+        color_by_sneath = min(max_window, max(0, round((sneath.get((aa1, aa2), min_sneath)-min_sneath)*max_window/(max_sneath))))
         combinations = max_window if aa1 == aa2 else 0
 
         if ((aa1 in PROTEINS) and (aa2 in PROTEINS)):

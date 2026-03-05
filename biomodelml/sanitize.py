@@ -3,9 +3,9 @@ from biotite.sequence import NucleotideSequence, ProteinSequence, AlphabetError
 from biomodelml.structs import SeqTypeStruct
 
 
-NUCLEOTIDE_SYMBOLS = NucleotideSequence.alphabet_unamb.get_symbols() + ["U"]
-ALL_NUCLEOTIDE_SYMBOLS = NUCLEOTIDE_SYMBOLS + NucleotideSequence.alphabet_amb.get_symbols()
-PROTEIN_SYMBOLS = ProteinSequence.alphabet.get_symbols()
+NUCLEOTIDE_SYMBOLS = tuple(NucleotideSequence.alphabet_unamb.get_symbols()) + ("U",)
+ALL_NUCLEOTIDE_SYMBOLS = NUCLEOTIDE_SYMBOLS + tuple(NucleotideSequence.alphabet_amb.get_symbols())
+PROTEIN_SYMBOLS = tuple(ProteinSequence.alphabet.get_symbols())
 SEQ_TYPES = SeqTypeStruct(N=ALL_NUCLEOTIDE_SYMBOLS, P=PROTEIN_SYMBOLS)
 
 
