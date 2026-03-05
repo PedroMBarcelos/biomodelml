@@ -10,6 +10,7 @@ __pycache__/
 venv/
 ENV/
 env/
+test_env/
 
 # Distribution / packaging
 build/
@@ -42,6 +43,13 @@ Thumbs.db
 data/images/
 data/trees/
 *.sanitized
+
+# Generated output directories
+output_myoglobin/
+output_myoglobin_images/
+final_demo/
+final_test/
+test_algorithm_selection/
 
 # Large data files
 *.zip
