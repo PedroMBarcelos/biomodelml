@@ -10,7 +10,7 @@ from Bio import SeqIO
 from biomodelml.matrices import save_image_by_matrices
 
 
-def process_fasta(fasta_file: str, output_path: str, seq_type: str, max_window: int = 255):
+def process_fasta(fasta_file: str, output_path: str, seq_type: str, max_window: int = 255, generate_variations: bool = False):
     """
     Process FASTA file and generate self-comparison matrix images.
     
@@ -19,6 +19,8 @@ def process_fasta(fasta_file: str, output_path: str, seq_type: str, max_window: 
         output_path: Directory to save generated images
         seq_type: Sequence type ('N' or 'P')
         max_window: Maximum window size for matrix generation
+        generate_variations: If True, generate all 11 channel variations.
+                            If False (default), generate only full/ RGB image (91% storage savings).
     """
     procs = os.cpu_count()
 
@@ -31,7 +33,7 @@ def process_fasta(fasta_file: str, output_path: str, seq_type: str, max_window: 
         to_run = []
         for s in sequences:
             to_run.append(
-                (s.description, s.description, s.seq, s.seq, max_window, output_path, seq_type)
+                (s.description, s.description, s.seq, s.seq, max_window, output_path, seq_type, generate_variations)
             )
         
         print(f"Starting to build image matrix for {len(to_run)} sequences")
@@ -82,6 +84,13 @@ Examples:
         help="Maximum window size for matrix generation (default: 255)"
     )
     
+    parser.add_argument(
+        "--extended-channels",
+        action="store_true",
+        help="Generate all 11 image channel variations (red/, green/, blue/, gray_*, etc.). "
+             "Default: generate only full/ RGB images (saves ~91%% disk space and I/O time)."
+    )
+    
     args = parser.parse_args()
     
     # Create output subdirectory based on fasta filename
@@ -90,7 +99,7 @@ Examples:
     os.makedirs(output_dir, exist_ok=True)
     
     try:
-        process_fasta(args.fasta_file, output_dir, args.seq_type, args.max_window)
+        process_fasta(args.fasta_file, output_dir, args.seq_type, args.max_window, args.extended_channels)
     except Exception as e:
         print(f"Error generating matrices: {e}", file=sys.stderr)
         sys.exit(1)

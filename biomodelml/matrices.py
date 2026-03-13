@@ -1,7 +1,7 @@
 import os
 import numpy
 import itertools
-from matplotlib import pyplot
+import cv2
 from Bio.Seq import Seq
 from biotite.sequence.align import SubstitutionMatrix
 from biotite.sequence import NucleotideSequence, ProteinSequence
@@ -96,8 +96,8 @@ def _save_grayscale(
     filename: str
 ):
     os.makedirs(output_path, exist_ok=True)
-    pyplot.imsave(
-        os.path.join(output_path, filename), matrix, cmap=pyplot.cm.gray
+    cv2.imwrite(
+        os.path.join(output_path, filename), matrix
     )
 
 
@@ -150,25 +150,29 @@ def _produce_by_channel(
     os.makedirs(os.path.join(output_path, channel_name), exist_ok=True)
     for channel in channels_not.get(channel_name, []):
         new_matrix[:, :, channel] = 0
-    pyplot.imsave(
+    
+    # Convert RGB to BGR for OpenCV
+    bgr_matrix = cv2.cvtColor(new_matrix, cv2.COLOR_RGB2BGR)
+    cv2.imwrite(
         os.path.join(output_path, channel_name, filename),
-        new_matrix
+        bgr_matrix
     )
 
 
-def _produce_channel_images(**kwargs):
+def _produce_channel_images(generate_variations=False, **kwargs):
     if len(kwargs["matrix"].shape) == 3:
         _produce_by_channel("full", **kwargs)
-        _produce_by_channel("red", **kwargs)
-        _produce_by_channel("green", **kwargs)
-        _produce_by_channel("blue", **kwargs)
-        _produce_by_channel("red_blue", **kwargs)
-        _produce_by_channel("red_green", **kwargs)
-        _produce_by_channel("green_blue", **kwargs)
-        _produce_grayscale_by_channel("gray_r", **kwargs)
-        _produce_grayscale_by_channel("gray_g", **kwargs)
-        _produce_grayscale_by_channel("gray_b", **kwargs)
-        _produce_grayscale_groups(**kwargs)
+        if generate_variations:
+            _produce_by_channel("red", **kwargs)
+            _produce_by_channel("green", **kwargs)
+            _produce_by_channel("blue", **kwargs)
+            _produce_by_channel("red_blue", **kwargs)
+            _produce_by_channel("red_green", **kwargs)
+            _produce_by_channel("green_blue", **kwargs)
+            _produce_grayscale_by_channel("gray_r", **kwargs)
+            _produce_grayscale_by_channel("gray_g", **kwargs)
+            _produce_grayscale_by_channel("gray_b", **kwargs)
+            _produce_grayscale_groups(**kwargs)
     else:
         kwargs["output_path"] = os.path.join(kwargs["output_path"], "full")
         _save_grayscale(**kwargs)
@@ -176,8 +180,96 @@ def _produce_channel_images(**kwargs):
 
 def save_image_by_matrices(
         name1: str, name2: str, seq1: Seq, seq2: Seq,
-        max_window: int, output_path: str, seq_type: str):
+        max_window: int, output_path: str, seq_type: str,
+        generate_variations: bool = False):
+    """
+    Generate and save sequence comparison matrix as images.
+    
+    Args:
+        name1, name2: Sequence identifiers
+        seq1, seq2: Biological sequences
+        max_window: Maximum pixel value
+        output_path: Root directory for image storage
+        seq_type: 'N' for nucleotides, 'P' for proteins
+        generate_variations: If True, generate all 11 channel variations.
+                            If False (default), generate only full/ RGB image.
+    """
     matrix = build_matrix(seq1, seq2, max_window, seq_type)
     filename = f"{name1}x{name2}.png" if name1 != name2 else f"{name1}.png"
     _produce_channel_images(
+        generate_variations=generate_variations,
         matrix=matrix, output_path=output_path, filename=filename)
+
+
+def extract_channel(image_array: numpy.ndarray, channel: str) -> numpy.ndarray:
+    """
+    Extract specific channel(s) from RGB image array in memory.
+    No disk I/O required - use this instead of loading from channel subdirectories.
+    
+    Args:
+        image_array: RGB numpy array (H, W, 3) with dtype uint8
+        channel: Channel type to extract:
+                 'red', 'green', 'blue' - single color channel (others zeroed)
+                 'red_blue', 'red_green', 'green_blue' - channel combinations
+                 'gray_r', 'gray_g', 'gray_b' - grayscale of individual channels
+                 'gray_max' - grayscale using max(R, G, B)
+                 'gray_mean' - grayscale using mean(R, G, B)
+                 'full' - returns original array unchanged
+    
+    Returns:
+        numpy.ndarray: Extracted channel(s) as RGB (for color) or grayscale array
+    
+    Examples:
+        >>> img = build_matrix(seq1, seq2, 255, "N")
+        >>> red_only = extract_channel(img, 'red')  # Shape: (H, W, 3), red channel only
+        >>> gray = extract_channel(img, 'gray_max')  # Shape: (H, W), grayscale
+    """
+    if channel == 'full':
+        return image_array.copy()
+    
+    # Single color channels (RGB with specific channel, others zeroed)
+    if channel == 'red':
+        result = image_array.copy()
+        result[:, :, 1:3] = 0
+        return result
+    elif channel == 'green':
+        result = image_array.copy()
+        result[:, :, [0, 2]] = 0
+        return result
+    elif channel == 'blue':
+        result = image_array.copy()
+        result[:, :, 0:2] = 0
+        return result
+    
+    # Channel combinations
+    elif channel == 'red_blue':
+        result = image_array.copy()
+        result[:, :, 1] = 0  # Zero green
+        return result
+    elif channel == 'red_green':
+        result = image_array.copy()
+        result[:, :, 2] = 0  # Zero blue
+        return result
+    elif channel == 'green_blue':
+        result = image_array.copy()
+        result[:, :, 0] = 0  # Zero red
+        return result
+    
+    # Grayscale conversions (return 2D arrays)
+    elif channel == 'gray_r':
+        return image_array[:, :, 0]
+    elif channel == 'gray_g':
+        return image_array[:, :, 1]
+    elif channel == 'gray_b':
+        return image_array[:, :, 2]
+    elif channel == 'gray_max':
+        return numpy.max(image_array, axis=2)
+    elif channel == 'gray_mean':
+        return numpy.mean(image_array, axis=2).astype(numpy.uint8)
+    
+    else:
+        raise ValueError(
+            f"Unknown channel type: {channel}. "
+            f"Valid options: 'red', 'green', 'blue', 'red_blue', 'red_green', "
+            f"'green_blue', 'gray_r', 'gray_g', 'gray_b', 'gray_max', 'gray_mean', 'full'"
+        )
