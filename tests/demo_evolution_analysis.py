@@ -380,7 +380,11 @@ def save_mutation_history(root: EvolutionaryNode, output_path: Path) -> None:
 def run_biomodelml_analysis(fasta_path: Path, output_dir: Path, 
                             sequence_type: str = "P",
                             selected_algorithms: List[str] = None,
-                            profile: bool = False) -> Tuple[List[Path], Dict[str, float]]:
+                            profile: bool = False,
+                            optflow_mode: str = "legacy",
+                            optflow_threshold: float = None,
+                            optflow_diagonal_width: int = None,
+                            optflow_highpass: bool = None) -> Tuple[List[Path], Dict[str, float]]:
     """
     Run biomodelml analysis on the evolved sequences
     
@@ -391,6 +395,10 @@ def run_biomodelml_analysis(fasta_path: Path, output_dir: Path,
         selected_algorithms: List of algorithm codes to run (e.g., ['nw', 'sw'])
                            If None or contains 'all', run all available algorithms
         profile: If True, measure and report timing for each algorithm
+        optflow_mode: Optical flow preset ('legacy' or 'strict')
+        optflow_threshold: Optional override for optical flow magnitude threshold
+        optflow_diagonal_width: Optional override for optical flow diagonal ribbon width
+        optflow_highpass: Optional override to force enable/disable high-pass preprocessing
         
     Returns:
         Tuple of (tree_paths, timings_dict) where timings_dict maps algorithm names to execution times
@@ -401,7 +409,7 @@ def run_biomodelml_analysis(fasta_path: Path, output_dir: Path,
     
     # Parse algorithm selection
     if selected_algorithms is None or 'all' in selected_algorithms:
-        selected_algorithms = ['nw', 'sw', 'rssim', 'ussim', 'gssim', 'wmsssim', 'deepsearch']
+        selected_algorithms = ['nw', 'sw', 'rssim', 'ussim', 'gssim', 'wmsssim', 'deepsearch', 'optflow']
     else:
         # Normalize to lowercase for case-insensitive matching
         selected_algorithms = [a.lower() for a in selected_algorithms]
@@ -423,10 +431,12 @@ def run_biomodelml_analysis(fasta_path: Path, output_dir: Path,
         from biomodelml.variants.greedy_ssim import GreedySSIMVariant
         from biomodelml.variants.windowed_ssim_multiscale import WindowedSSIMMultiScaleVariant
         from biomodelml.variants.deep_search.variant import DeepSearchVariant
+        from biomodelml.variants.optical_flow import OpticalFlowVariant
         from biomodelml.sanitize import convert_and_remove_unrelated_sequences
         from biomodelml.matrices import save_image_by_matrices
         from Bio import SeqIO
         from concurrent.futures import ThreadPoolExecutor
+        import time
         import os
     except ImportError as e:
         print(f"Error importing biomodelml: {e}")
@@ -442,8 +452,8 @@ def run_biomodelml_analysis(fasta_path: Path, output_dir: Path,
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Generate matrix images for SSIM variants
-    image_based_requested = set(selected_algorithms) & {'rssim', 'ussim', 'gssim', 'wmsssim', 'deepsearch'}
+    # Generate matrix images for SSIM variants and optical flow
+    image_based_requested = set(selected_algorithms) & {'rssim', 'ussim', 'gssim', 'wmsssim', 'deepsearch', 'optflow'}
     
     if image_based_requested:
         print("\n2. Generating self-comparison matrix images...")
@@ -566,6 +576,28 @@ def run_biomodelml_analysis(fasta_path: Path, output_dir: Path,
                     variant_info.append((deep, "DeepSearch", "deepsearch"))
                 except Exception as e:
                     print(f"   ✗ DeepSearch: {e}")
+            
+            if 'optflow' in selected_algorithms:
+                try:
+                    print("   ✓ Optical Flow (Farneback Dense Flow)")
+                    optflow_kwargs = {'optflow_mode': optflow_mode}
+                    if optflow_threshold is not None:
+                        optflow_kwargs['magnitude_threshold'] = optflow_threshold
+                    if optflow_diagonal_width is not None:
+                        optflow_kwargs['diagonal_ribbon_width'] = optflow_diagonal_width
+                    if optflow_highpass is not None:
+                        optflow_kwargs['highpass_enabled'] = optflow_highpass
+
+                    optflow = OpticalFlowVariant(
+                        sanitized_path,
+                        sequence_type,
+                        str(image_dir.parent),
+                        **optflow_kwargs
+                    )
+                    variants.append(optflow)
+                    variant_info.append((optflow, "Optical Flow", "optflow"))
+                except Exception as e:
+                    print(f"   ✗ OpticalFlow: {e}")
         else:
             print(f"   ⚠️  Image-based algorithms requested but no images available: {image_based_requested}")
             print(f"   Note: These algorithms will be skipped")
@@ -652,6 +684,7 @@ Algorithm Codes:
   gssim     - Greedy SSIM (image-based)
   wmsssim   - Windowed Multi-Scale SSIM (image-based)
   deepsearch- Deep Search with VGG16 (deep learning)
+  optflow   - Optical Flow with Farneback (dense flow, alignment-free)
   all       - Run all available algorithms (default)
 
 Examples:
@@ -729,6 +762,34 @@ Examples:
         action='store_true',
         help='Enable performance profiling (measure time for each algorithm)'
     )
+    parser.add_argument(
+        '--optflow-mode',
+        choices=['legacy', 'strict'],
+        default='legacy',
+        help='Optical flow preset mode (default: legacy)'
+    )
+    parser.add_argument(
+        '--optflow-threshold',
+        type=float,
+        default=None,
+        help='Override optical flow magnitude threshold (e.g., 0.5 or 1.0)'
+    )
+    parser.add_argument(
+        '--optflow-diagonal-width',
+        type=int,
+        default=None,
+        help='Override optical flow diagonal ribbon width (pixels)'
+    )
+    parser.add_argument(
+        '--optflow-highpass',
+        action='store_true',
+        help='Force-enable optical flow high-pass preprocessing'
+    )
+    parser.add_argument(
+        '--optflow-no-highpass',
+        action='store_true',
+        help='Force-disable optical flow high-pass preprocessing'
+    )
     
     args = parser.parse_args()
     
@@ -736,12 +797,23 @@ Examples:
     args.algorithms = [a.lower() for a in args.algorithms]
     
     # Validate algorithms
-    valid_algorithms = {'all', 'nw', 'sw', 'rssim', 'ussim', 'gssim', 'wmsssim', 'deepsearch'}
+    valid_algorithms = {'all', 'nw', 'sw', 'rssim', 'ussim', 'gssim', 'wmsssim', 'deepsearch', 'optflow'}
     invalid = set(args.algorithms) - valid_algorithms
     if invalid:
         print(f"Error: Invalid algorithm(s): {', '.join(invalid)}")
         print(f"Valid options: {', '.join(sorted(valid_algorithms))}")
         sys.exit(1)
+
+    if args.optflow_highpass and args.optflow_no_highpass:
+        print("Error: --optflow-highpass and --optflow-no-highpass are mutually exclusive")
+        sys.exit(1)
+
+    if args.optflow_highpass:
+        optflow_highpass = True
+    elif args.optflow_no_highpass:
+        optflow_highpass = False
+    else:
+        optflow_highpass = None
     
     # Create output directory
     args.output.mkdir(parents=True, exist_ok=True)
@@ -758,6 +830,13 @@ Examples:
     print(f"  Random seed: {args.seed}")
     print(f"  Algorithms: {', '.join([a.upper() for a in args.algorithms])}")
     print(f"  Performance profiling: {'Enabled' if args.profile else 'Disabled'}")
+    print(f"  Optical Flow mode: {args.optflow_mode}")
+    if args.optflow_threshold is not None:
+        print(f"  Optical Flow threshold override: {args.optflow_threshold}")
+    if args.optflow_diagonal_width is not None:
+        print(f"  Optical Flow diagonal width override: {args.optflow_diagonal_width}")
+    if optflow_highpass is not None:
+        print(f"  Optical Flow high-pass override: {optflow_highpass}")
     print(f"  Output directory: {args.output}")
     
     # Step 1: Generate ancestral sequence
@@ -832,7 +911,11 @@ Examples:
             args.output, 
             sequence_type="P",
             selected_algorithms=args.algorithms,
-            profile=args.profile
+            profile=args.profile,
+            optflow_mode=args.optflow_mode,
+            optflow_threshold=args.optflow_threshold,
+            optflow_diagonal_width=args.optflow_diagonal_width,
+            optflow_highpass=optflow_highpass
         )
     else:
         print("\n(Skipping biomodelml analysis as requested)")

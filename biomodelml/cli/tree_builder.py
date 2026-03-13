@@ -16,10 +16,15 @@ from biomodelml.variants.windowed_ssim_multiscale import WindowedSSIMMultiScaleV
 from biomodelml.variants.greedy_ssim import GreedySSIMVariant
 from biomodelml.variants.unrestricted_ssim import UnrestrictedSSIMVariant
 from biomodelml.variants.deep_search.variant import DeepSearchVariant
+from biomodelml.variants.optical_flow import OpticalFlowVariant
 
 
 def build_trees(fasta_file: str, output_path: str, sequence_type: str, 
-                image_path: str = None, algorithms: list = None):
+                image_path: str = None, algorithms: list = None,
+                optflow_mode: str = "legacy",
+                optflow_threshold: float = None,
+                optflow_diagonal_width: int = None,
+                optflow_highpass: bool = None):
     """
     Build phylogenetic trees using specified algorithms.
     
@@ -31,6 +36,14 @@ def build_trees(fasta_file: str, output_path: str, sequence_type: str,
         algorithms: List of algorithm names to use (default: all)
     """
     # Default: run all algorithms
+    optflow_kwargs = {'optflow_mode': optflow_mode}
+    if optflow_threshold is not None:
+        optflow_kwargs['magnitude_threshold'] = optflow_threshold
+    if optflow_diagonal_width is not None:
+        optflow_kwargs['diagonal_ribbon_width'] = optflow_diagonal_width
+    if optflow_highpass is not None:
+        optflow_kwargs['highpass_enabled'] = optflow_highpass
+
     all_variants = {
         'control': lambda: ControlVariant(fasta_file, sequence_type),
         'sw': lambda: SmithWatermanVariant(fasta_file, sequence_type),
@@ -41,7 +54,8 @@ def build_trees(fasta_file: str, output_path: str, sequence_type: str,
         'gssim': lambda: GreedySSIMVariant(fasta_file, sequence_type, image_path),
         'ussim': lambda: UnrestrictedSSIMVariant(fasta_file, sequence_type, image_path),
         'uqi': lambda: UQIVariant(fasta_file, sequence_type, image_path),
-        'deep': lambda: DeepSearchVariant(fasta_file, sequence_type, image_path)
+        'deep': lambda: DeepSearchVariant(fasta_file, sequence_type, image_path),
+        'optflow': lambda: OpticalFlowVariant(fasta_file, sequence_type, image_path, **optflow_kwargs)
     }
     
     # Select algorithms to run
@@ -78,6 +92,7 @@ Available algorithms:
   ussim     - Unrestricted Sliced SSIM
   uqi       - Universal Quality Index
   deep      - Deep Search (VGG16 + Annoy)
+  optflow   - Dense Optical Flow with Farneback
 
 Examples:
   # Run all algorithms
@@ -116,8 +131,41 @@ Examples:
         "--algorithms",
         nargs="+",
         choices=['control', 'sw', 'nw', 'rssim', 'rmsssim', 'wmsssim', 
-                 'gssim', 'ussim', 'uqi', 'deep'],
+                 'gssim', 'ussim', 'uqi', 'deep', 'optflow'],
         help="Specific algorithms to run (default: all)"
+    )
+
+    parser.add_argument(
+        "--optflow-mode",
+        choices=["legacy", "strict"],
+        default="legacy",
+        help="Optical flow behavior preset: legacy (historical) or strict (aggressive denoising)"
+    )
+
+    parser.add_argument(
+        "--optflow-threshold",
+        type=float,
+        default=None,
+        help="Override optical flow magnitude threshold (e.g., 0.5 or 1.0)"
+    )
+
+    parser.add_argument(
+        "--optflow-diagonal-width",
+        type=int,
+        default=None,
+        help="Override diagonal ribbon width in pixels"
+    )
+
+    parser.add_argument(
+        "--optflow-highpass",
+        action="store_true",
+        help="Force-enable high-pass preprocessing in optical flow"
+    )
+
+    parser.add_argument(
+        "--optflow-no-highpass",
+        action="store_true",
+        help="Force-disable high-pass preprocessing in optical flow"
     )
     
     args = parser.parse_args()
@@ -125,6 +173,17 @@ Examples:
     # Validate image path if provided
     if args.image_path and not os.path.exists(args.image_path):
         print(f"Warning: Image path {args.image_path} does not exist", file=sys.stderr)
+
+    if args.optflow_highpass and args.optflow_no_highpass:
+        print("Error: --optflow-highpass and --optflow-no-highpass are mutually exclusive", file=sys.stderr)
+        sys.exit(1)
+
+    if args.optflow_highpass:
+        optflow_highpass = True
+    elif args.optflow_no_highpass:
+        optflow_highpass = False
+    else:
+        optflow_highpass = None
     
     # Create output subdirectory
     base_name = args.fasta_file.split(".")[0].split("/")[-1]
@@ -133,7 +192,9 @@ Examples:
     
     try:
         build_trees(args.fasta_file, output_dir, args.seq_type, 
-                   args.image_path, args.algorithms)
+                   args.image_path, args.algorithms,
+                   args.optflow_mode, args.optflow_threshold,
+                   args.optflow_diagonal_width, optflow_highpass)
     except Exception as e:
         print(f"Error building trees: {e}", file=sys.stderr)
         import traceback

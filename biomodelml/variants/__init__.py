@@ -19,6 +19,7 @@ from biomodelml.variants.greedy_ssim import GreedySSIMVariant
 from biomodelml.variants.unrestricted_ssim import UnrestrictedSSIMVariant
 from biomodelml.variants.uqi import UQIVariant
 from biomodelml.variants.deep_search.variant import DeepSearchVariant
+from biomodelml.variants.optical_flow import OpticalFlowVariant
 
 __all__ = [
     "Variant",
@@ -34,4 +35,5 @@ __all__ = [
     "UnrestrictedSSIMVariant",
     "UQIVariant",
     "DeepSearchVariant",
+    "OpticalFlowVariant",
 ]
