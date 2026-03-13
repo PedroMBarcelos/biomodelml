@@ -14,9 +14,9 @@ class ResizedSSIMVariant(SSIMVariant):
         max_y = image.shape[2] if image.shape[2] > other.shape[2] else other.shape[2]
         return (
             tensorflow.image.resize(
-                image, (max_x, max_y), tensorflow.image.ResizeMethod.BICUBIC),
+                image, (max_x, max_y), tensorflow.image.ResizeMethod.NEAREST_NEIGHBOR),
             tensorflow.image.resize(
-                other, (max_x, max_y), tensorflow.image.ResizeMethod.BICUBIC)
+                other, (max_x, max_y), tensorflow.image.ResizeMethod.NEAREST_NEIGHBOR)
         )
 
     def _compare(self, img1: str, img2: str) -> Tuple[float, List[ImgDebugs]]:

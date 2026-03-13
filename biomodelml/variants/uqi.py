@@ -28,8 +28,8 @@ class UQIVariant(Variant):
         max_x = image.shape[0] if image.shape[0] > other.shape[0] else other.shape[0]
         max_y = image.shape[1] if image.shape[1] > other.shape[1] else other.shape[1]
         result = (
-            cv2.resize(image, dsize=(max_x, max_y), interpolation=cv2.INTER_CUBIC),
-            cv2.resize(other, dsize=(max_x, max_y), interpolation=cv2.INTER_CUBIC)
+            cv2.resize(image, dsize=(max_x, max_y), interpolation=cv2.INTER_NEAREST),
+            cv2.resize(other, dsize=(max_x, max_y), interpolation=cv2.INTER_NEAREST)
         )
         return result
 
@@ -48,7 +48,7 @@ class UQIVariant(Variant):
             max_image = cv2.resize(
                 max_image,
                 dsize=(max_image.shape[0]+1, max_image.shape[1]+1),
-                interpolation=cv2.INTER_CUBIC)
+                interpolation=cv2.INTER_NEAREST)
         new_image = numpy.zeros(max_image.shape)
         pad = diff_shape // 2
         new_image[pad:-pad, pad:-pad] = min_image

@@ -18,7 +18,7 @@ class FeatureExtractor:
         return cv2.resize(
             img,
             dsize=(self._input_shape[0], self._input_shape[1]),
-            interpolation=cv2.INTER_CUBIC)
+            interpolation=cv2.INTER_NEAREST)
 
     def _upscale_with_border(self, img: numpy.ndarray) -> numpy.ndarray:
         """Upscale image with reflection padding (better than black borders)"""
@@ -27,7 +27,7 @@ class FeatureExtractor:
         
         # If already large enough, just resize
         if h >= target_h and w >= target_w:
-            return cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
+            return cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
         
         # Calculate padding needed
         pad_h = max(0, target_h - h)
@@ -52,7 +52,7 @@ class FeatureExtractor:
         
         # Ensure exact target size
         if padded.shape[:2] != (target_h, target_w):
-            padded = cv2.resize(padded, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
+            padded = cv2.resize(padded, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
         
         return padded
 
