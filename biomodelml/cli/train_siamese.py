@@ -35,17 +35,23 @@ def train(args):
     print(f"Validation set size: {len(val_dataset)}")
 
     # 4. Create DataLoaders
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=10)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=10)
+    # Use os.cpu_count() to dynamically set the number of workers
+    num_workers = max(1, os.cpu_count() - 1)
+    print(f"Using {num_workers} workers for data loading.")
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
 
     # 5. Initialize Model, Loss, and Optimizer
     print(f"Initializing model with {args.backbone} backbone...")
     model = SiameseRegressor(
         backbone=args.backbone,
-        freeze_backbone=not args.unfreeze_backbone
+        freeze_backbone=args.freeze_backbone
     ).to(device)
     criterion = torch.nn.MSELoss()
     optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.learning_rate)
+
+    # Initialize GradScaler for Automatic Mixed Precision
+    scaler = torch.cuda.amp.GradScaler()
 
     # Early stopping parameters
     best_val_loss = float('inf')
@@ -63,10 +69,15 @@ def train(args):
 
             optimizer.zero_grad()
 
-            outputs = model(img1, img2)
-            loss = criterion(outputs, dist)
-            loss.backward()
-            optimizer.step()
+            # Use autocast for mixed precision
+            with torch.cuda.amp.autocast():
+                outputs = model(img1, img2)
+                loss = criterion(outputs, dist)
+
+            # Scale loss and call backward
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
 
             running_loss += loss.item()
 
@@ -80,8 +91,10 @@ def train(args):
             for (img1, img2), dist in tqdm(val_loader, desc=f"Epoch {epoch+1}/{args.num_epochs} [Validation]"):
                 img1, img2 = img1.to(device), img2.to(device)
                 dist = dist.to(device)
-                outputs = model(img1, img2)
-                loss = criterion(outputs, dist)
+                # Use autocast for mixed precision in validation as well
+                with torch.cuda.amp.autocast():
+                    outputs = model(img1, img2)
+                    loss = criterion(outputs, dist)
                 val_loss += loss.item()
 
         avg_val_loss = val_loss / len(val_loader)
@@ -110,11 +123,11 @@ if __name__ == '__main__':
     parser.add_argument('--seq_len', type=int, default=500, help='Length of the sequences to simulate.')
     parser.add_argument('--max_len', type=int, default=550, help='Maximum length for padding image matrices.')
     parser.add_argument('--backbone', type=str, default='resnet50', choices=['resnet50', 'efficientnet_b0'], help='CNN backbone.')
-    parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training.') #default was 32, reduced to 2 for memory constraints
+    parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training.')
     parser.add_argument('--num_epochs', type=int, default=50, help='Number of training epochs.')
     parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate for Adam optimizer.')
     parser.add_argument('--patience', type=int, default=5, help='Patience for early stopping.')
-    parser.add_argument('--unfreeze-backbone', action='store_true', help='If set, the backbone will be trained as well.')
+    parser.add_argument('--freeze-backbone', action='store_true', help='If set, the backbone will be frozen.')
     parser.add_argument('--save_dir', type=str, default='models', help='Directory to save the trained model.')
 
     args = parser.parse_args()

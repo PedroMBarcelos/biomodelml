@@ -9,7 +9,7 @@ class SiameseRegressor(nn.Module):
     backbone networks (with shared weights), and predicts the distance
     (a continuous value) between them.
     """
-    def __init__(self, backbone='resnet50', pretrained=True, freeze_backbone=True):
+    def __init__(self, backbone='resnet50', pretrained=True, freeze_backbone=False):
         """
         Initializes the Siamese Regressor.
         Args:
