@@ -17,6 +17,7 @@ from biomodelml.variants.greedy_ssim import GreedySSIMVariant
 from biomodelml.variants.unrestricted_ssim import UnrestrictedSSIMVariant
 from biomodelml.variants.deep_search.variant import DeepSearchVariant
 from biomodelml.variants.optical_flow import OpticalFlowVariant
+from biomodelml.variants.siamese import SiameseVariant
 
 
 def build_trees(fasta_file: str, output_path: str, sequence_type: str, 
@@ -24,7 +25,8 @@ def build_trees(fasta_file: str, output_path: str, sequence_type: str,
                 optflow_mode: str = "legacy",
                 optflow_threshold: float = None,
                 optflow_diagonal_width: int = None,
-                optflow_highpass: bool = None):
+                optflow_highpass: bool = None,
+                model_path: str = 'models/siamese_regressor.pth'):
     """
     Build phylogenetic trees using specified algorithms.
     
@@ -34,6 +36,7 @@ def build_trees(fasta_file: str, output_path: str, sequence_type: str,
         sequence_type: 'N' for nucleotides or 'P' for proteins
         image_path: Optional path to pre-generated matrix images
         algorithms: List of algorithm names to use (default: all)
+        model_path: Path to the trained Siamese model
     """
     # Default: run all algorithms
     optflow_kwargs = {'optflow_mode': optflow_mode}
@@ -55,7 +58,8 @@ def build_trees(fasta_file: str, output_path: str, sequence_type: str,
         'ussim': lambda: UnrestrictedSSIMVariant(fasta_file, sequence_type, image_path),
         'uqi': lambda: UQIVariant(fasta_file, sequence_type, image_path),
         'deep': lambda: DeepSearchVariant(fasta_file, sequence_type, image_path),
-        'optflow': lambda: OpticalFlowVariant(fasta_file, sequence_type, image_path, **optflow_kwargs)
+        'optflow': lambda: OpticalFlowVariant(fasta_file, sequence_type, image_path, **optflow_kwargs),
+        'siamese': lambda: SiameseVariant(fasta_file, sequence_type, model_path=model_path)
     }
     
     # Select algorithms to run
@@ -93,6 +97,7 @@ Available algorithms:
   uqi       - Universal Quality Index
   deep      - Deep Search (VGG16 + Annoy)
   optflow   - Dense Optical Flow with Farneback
+  siamese   - Siamese Neural Network Regressor
 
 Examples:
   # Run all algorithms
@@ -101,8 +106,58 @@ Examples:
   # Run specific algorithms
   %(prog)s sequences.fasta.N.sanitized output/ N --algorithms rmsssim ussim
   
+  # Run Siamese network with a custom model
+  %(prog)s sequences.fasta.N.sanitized output/ N --algorithms siamese --model-path /path/to/your/model.pth
+
   # Use pre-generated images
   %(prog)s sequences.fasta.N.sanitized output/ N --image-path data/images/
+        """
+    )
+    
+    parser.add_argument(
+        "fasta_file",
+        help="Path to the sanitized FASTA file"
+    )
+    
+    parser.add_argument(
+        "output_path",
+        help="Directory to save phylogenetic tree results"
+    )
+    
+    parser.add_argument(
+        "seq_type",
+        choices=["N", "P"],
+        help="Sequence type: N for nucleotides, P for proteins"
+    )
+    
+    parser.add_argument(
+        "--image-path",
+        help="Path to pre-generated matrix images (optional)"
+    )
+    
+    parser.add_argument(
+        "--algorithms",
+        nargs="+",
+        choices=['control', 'sw', 'nw', 'rssim', 'rmsssim', 'wmsssim', 
+                 'gssim', 'ussim', 'uqi', 'deep', 'optflow', 'siamese'],
+        help="Specific algorithms to run (default: all)"
+    )
+
+    parser.add_argument(
+        "--model-path",
+        default="models/siamese_regressor.pth",
+        help="Path to the trained Siamese model weights (for 'siamese' algorithm)"
+    )
+
+    parser.add_argument(
+        "--optflow-mode",
+        choices=["legacy", "strict"],
+        default="legacy",
+        help="Optical flow behavior preset: legacy (historical) or strict (aggressive denoising)"
+    )
+
+    parser.add_argument(
+        "--optflow-threshold",
         """
     )
     

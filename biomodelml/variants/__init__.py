@@ -8,6 +8,7 @@ novel image-based methods using SSIM and deep learning.
 
 from biomodelml.variants.variant import Variant
 from biomodelml.variants.control import ControlVariant
+from biomodelml.variants.siamese import SiameseVariant
 from biomodelml.variants.sw import SmithWatermanVariant
 from biomodelml.variants.nw import NeedlemanWunschVariant
 from biomodelml.variants.ssim_base import SSIMVariant
