@@ -1,9 +1,12 @@
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 from torchvision import transforms
 import numpy as np
 import random
 from Bio.Seq import Seq
+import os
+import h5py
 
 
 from biomodelml.simulation import SyntheticEvolutionGenerator
@@ -11,32 +14,60 @@ from biomodelml.matrices import build_matrix
 
 class SiameseEvolutionDataset(Dataset):
     """
-    PyTorch Dataset for training the Siamese Regressor.
-    This dataset generates pairs of sequences on-the-fly using the
-    SyntheticEvolutionGenerator, converts them to image matrices, and
-    applies necessary transformations.
+    PyTorch Dataset for the Siamese Regressor.
+    This dataset can operate in two modes:
+    1. On-the-fly generation (for small tests).
+    2. Loading from a pre-generated HDF5 cache (for training).
     """
-    def __init__(self, generator, num_samples=100000, max_len=500, transform=None):
+    def __init__(self, generator=None, num_samples=100000, max_len=500, transform=None, cache_dir=None):
         """
         Args:
-            generator (SyntheticEvolutionGenerator): The data generator instance.
-            num_samples (int): The total number of samples (pairs) in the dataset.
+            generator (SyntheticEvolutionGenerator, optional): The data generator instance.
+            num_samples (int): The total number of samples.
             max_len (int): The maximum sequence length for padding matrices.
             transform (callable, optional): Optional transform to be applied on a sample.
+            cache_dir (str, optional): Directory to load pre-generated HDF5 dataset from.
         """
         self.generator = generator
         self.num_samples = num_samples
         self.max_len = max_len
-        self.transform = transform or self._get_default_transform()
+        self.transform = transform
+        self.cache_dir = cache_dir
+        self.h5_file = None
+        self.img1_dset = None
+        self.img2_dset = None
+        self.dist_dset = None
+
+        if self.cache_dir:
+            # Check for HDF5 file
+            hdf5_path = os.path.join(self.cache_dir, "dataset.h5")
+            if os.path.exists(hdf5_path):
+                print(f"Using HDF5 cached dataset from: {hdf5_path}")
+                self.h5_file = h5py.File(hdf5_path, 'r')
+                self.img1_dset = self.h5_file['img1']
+                self.img2_dset = self.h5_file['img2']
+                self.dist_dset = self.h5_file['dist']
+                self.num_samples = len(self.img1_dset)
+            else:
+                # Fallback to old .pt files if HDF5 doesn't exist
+                print(f"Warning: HDF5 file not found. Falling back to .pt files from: {self.cache_dir}")
+                self.file_list = sorted([os.path.join(self.cache_dir, f) for f in os.listdir(self.cache_dir) if f.endswith('.pt')])
+                self.num_samples = len(self.file_list)
+        elif not self.generator:
+            raise ValueError("A generator must be provided if not using a cache.")
+
+    def __del__(self):
+        """Close HDF5 file when dataset is deleted."""
+        if self.h5_file is not None:
+            self.h5_file.close()
 
     def _get_default_transform(self):
         """
         Returns a default transformation pipeline for the image matrices.
-        This includes converting to a tensor and applying normalization.
         """
         return transforms.Compose([
             transforms.ToTensor(),
-            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]) # Normalize to [-1, 1]
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ])
 
     def __len__(self):
@@ -45,69 +76,80 @@ class SiameseEvolutionDataset(Dataset):
 
     def __getitem__(self, idx):
         """
-        Generates and returns one sample from the dataset.
-        A sample consists of a pair of image matrices and their evolutionary distance.
+        Generates or loads one sample from the dataset.
         """
-        # 1. Generate a synthetic evolution pair
+        if self.cache_dir:
+            if self.h5_file is not None:
+                # Load from HDF5 (memory-mapped, very fast)
+                img1 = torch.from_numpy(self.img1_dset[idx])
+                img2 = torch.from_numpy(self.img2_dset[idx])
+                dist = torch.from_numpy(self.dist_dset[idx])
+                return (img1, img2), dist
+            else:
+                # Fallback to .pt files
+                file_path = self.file_list[idx]
+                data = torch.load(file_path)
+                return (data['img1'], data['img2']), data['dist']
+        else:
+            # On-the-fly generation (memory-optimized)
+            return self._generate_item()
+
+    def _generate_item(self):
+        """
+        Generates one sample on-the-fly using PyTorch padding.
+        """
         parent_seq, mutated_seq, distance = self.generator.generate_evolution_pair()
 
-        # 2. Convert sequences to an RGB image matrix
-        # The build_matrix function returns a NumPy array of shape (H, W, 3)
-        # We need to pad it to a fixed size (max_len x max_len)
-        image_matrix = build_matrix(parent_seq.seq, mutated_seq.seq, self.max_len, seq_type='N')
+        def process_sequence(seq):
+            matrix = build_matrix(seq, seq, self.max_len, seq_type='N')
+            h, w, c = matrix.shape
 
-        # 3. Pad the matrix to the max_len
-        h, w, c = image_matrix.shape
-        padded_matrix = np.zeros((self.max_len, self.max_len, c), dtype=np.uint8)
-        padded_matrix[:h, :w, :] = image_matrix
+            # Convert to tensor first (HWC -> CHW format)
+            tensor = torch.from_numpy(matrix).permute(2, 0, 1).float() / 255.0
 
-        # 4. Create two "views" of the data for the Siamese network.
-        # In our case, the matrix itself represents the comparison, so we
-        # create two dummy inputs. The real input will be the combined matrix.
-        # However, the spec implies two separate inputs. We will pass the same
-        # padded matrix as both inputs, as the matrix represents the *relationship*
-        # between the two sequences. A better approach is to have two separate matrices
-        # vs a reference, but we will follow the spec's logic of comparing I1 and I2.
-        # For our case, I1 is parent vs mutated, and I2 is a placeholder.
-        # Let's correct this: The network expects two images, one for each sequence.
-        # Each image should be a self-comparison matrix.
-        img1 = build_matrix(parent_seq.seq, parent_seq.seq, self.max_len, seq_type='N')
-        img2 = build_matrix(mutated_seq.seq, mutated_seq.seq, self.max_len, seq_type='N')
+            # Use PyTorch padding (more efficient than NumPy)
+            pad_h = self.max_len - h
+            pad_w = self.max_len - w
+            padded_tensor = F.pad(tensor, (0, pad_w, 0, pad_h), mode='constant', value=0)
 
-        # Pad them
-        h1, w1, c1 = img1.shape
-        padded_img1 = np.zeros((self.max_len, self.max_len, c1), dtype=np.uint8)
-        padded_img1[:h1, :w1, :] = img1
+            # Apply normalization
+            if self.transform:
+                return self.transform(padded_tensor)
+            else:
+                # Default normalization
+                mean = torch.tensor([0.5, 0.5, 0.5]).view(3, 1, 1)
+                std = torch.tensor([0.5, 0.5, 0.5]).view(3, 1, 1)
+                return (padded_tensor - mean) / std
 
-        h2, w2, c2 = img2.shape
-        padded_img2 = np.zeros((self.max_len, self.max_len, c2), dtype=np.uint8)
-        padded_img2[:h2, :w2, :] = img2
-
-
-        # 5. Apply transformations
-        if self.transform:
-            img1_tensor = self.transform(padded_img1)
-            img2_tensor = self.transform(padded_img2)
-
-        # 6. Convert distance to a tensor
+        img1_tensor = process_sequence(parent_seq.seq)
+        img2_tensor = process_sequence(mutated_seq.seq)
         distance_tensor = torch.tensor([distance], dtype=torch.float32)
 
         return (img1_tensor, img2_tensor), distance_tensor
 
 if __name__ == '__main__':
-    # Example of how to use the Dataset
-    print("Initializing SyntheticEvolutionGenerator...")
+    # Example of how to use the Dataset with on-the-fly generation
+    print("--- Testing On-the-fly Generation ---")
     gen = SyntheticEvolutionGenerator(seq_len=100)
+    dataset_live = SiameseEvolutionDataset(generator=gen, num_samples=10, max_len=150)
+    print(f"Live dataset length: {len(dataset_live)}")
+    (img1, img2), dist = dataset_live[0]
+    print(f"Sample 0 - Image 1 Tensor Shape: {img1.shape}, Distance: {dist.item():.4f}")
 
-    print("Initializing SiameseEvolutionDataset...")
-    dataset = SiameseEvolutionDataset(generator=gen, num_samples=10, max_len=150)
-
-    print(f"Dataset length: {len(dataset)}")
-
-    # Get one sample
-    (img1, img2), dist = dataset[0]
-    print(f"Sample 0:")
-    print(f"  Image 1 Tensor Shape: {img1.shape}")
-    print(f"  Image 2 Tensor Shape: {img2.shape}")
-    print(f"  Distance Tensor: {dist}")
-    print(f"  Distance Value: {dist.item():.4f}")
+    # Example of how to use the Dataset with a cache
+    # First, create a dummy cache
+    print("\n--- Testing Cached Dataset ---")
+    dummy_cache = 'data/dummy_cache'
+    if not os.path.exists(dummy_cache):
+        os.makedirs(dummy_cache)
+    for i in range(5):
+        torch.save({
+            'img1': torch.randn(3, 150, 150),
+            'img2': torch.randn(3, 150, 150),
+            'dist': torch.tensor([0.1 * i])
+        }, os.path.join(dummy_cache, f'sample_{i}.pt'))
+    
+    dataset_cached = SiameseEvolutionDataset(cache_dir=dummy_cache)
+    print(f"Cached dataset length: {len(dataset_cached)}")
+    (img1_c, img2_c), dist_c = dataset_cached[0]
+    print(f"Sample 0 - Image 1 Tensor Shape: {img1_c.shape}, Distance: {dist_c.item():.4f}")

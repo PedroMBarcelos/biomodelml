@@ -3,11 +3,92 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 import argparse
 import os
+import sys
 from tqdm import tqdm
+import importlib
+
+
+# Ensure local project package is imported when this file is run directly.
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 from biomodelml.simulation import SyntheticEvolutionGenerator
-from biomodelml.datasets import SiameseEvolutionDataset
+from biomodelml import datasets
 from biomodelml.models import SiameseRegressor
+
+# Force reload of the datasets module to ensure the latest version is used
+importlib.reload(datasets)
+print(f"Loading dataset module from: {datasets.__file__}")
+from biomodelml.datasets import SiameseEvolutionDataset
+
+
+def evaluate_on_test_set(model, test_loader, criterion, device):
+    """
+    Evaluate the model on the test set (only used after training is complete).
+
+    Args:
+        model: The trained model
+        test_loader: DataLoader for the test set
+        criterion: Loss function
+        device: Device to run evaluation on
+
+    Returns:
+        dict: Dictionary with test metrics
+    """
+    print("\n" + "=" * 60)
+    print("Evaluating on Test Set (FINAL EVALUATION)")
+    print("=" * 60)
+
+    model.eval()
+    test_loss = 0.0
+    all_predictions = []
+    all_targets = []
+
+    with torch.no_grad():
+        for (img1, img2), dist in tqdm(test_loader, desc="Testing"):
+            img1, img2 = img1.to(device), img2.to(device)
+            dist = dist.to(device)
+
+            outputs = model(img1, img2)
+            loss = criterion(outputs, dist)
+            test_loss += loss.item()
+
+            # Store predictions and targets for additional metrics
+            all_predictions.extend(outputs.cpu().numpy().flatten())
+            all_targets.extend(dist.cpu().numpy().flatten())
+
+    avg_test_loss = test_loss / len(test_loader)
+
+    # Calculate additional metrics
+    predictions = torch.tensor(all_predictions)
+    targets = torch.tensor(all_targets)
+
+    mae = torch.mean(torch.abs(predictions - targets)).item()
+    rmse = torch.sqrt(torch.mean((predictions - targets) ** 2)).item()
+
+    # Correlation coefficient
+    pred_mean = predictions.mean()
+    target_mean = targets.mean()
+    correlation = (((predictions - pred_mean) * (targets - target_mean)).sum() /
+                   (torch.sqrt(((predictions - pred_mean) ** 2).sum()) *
+                    torch.sqrt(((targets - target_mean) ** 2).sum()))).item()
+
+    print(f"\nTest Set Results:")
+    print(f"  Test Loss (MSE): {avg_test_loss:.6f}")
+    print(f"  MAE:  {mae:.6f}")
+    print(f"  RMSE: {rmse:.6f}")
+    print(f"  Correlation: {correlation:.4f}")
+    print("=" * 60)
+
+    return {
+        'test_loss': avg_test_loss,
+        'mae': mae,
+        'rmse': rmse,
+        'correlation': correlation
+    }
+
 
 def train(args):
     """
@@ -18,25 +99,66 @@ def train(args):
     print(f"Using device: {device}")
 
     # 2. Initialize Data Generator and Dataset
-    print("Initializing data generator and dataset...")
-    generator = SyntheticEvolutionGenerator(seq_len=args.seq_len)
-    full_dataset = SiameseEvolutionDataset(
-        generator=generator,
-        num_samples=args.num_samples,
-        max_len=args.max_len
+    print("Initializing dataset...")
+    if args.cache_dir:
+        full_dataset = SiameseEvolutionDataset(cache_dir=args.cache_dir)
+    else:
+        print("Warning: No cache directory specified. Generating data on-the-fly.")
+        generator = SyntheticEvolutionGenerator(seq_len=args.seq_len)
+        full_dataset = SiameseEvolutionDataset(
+            generator=generator,
+            num_samples=args.num_samples,
+            max_len=args.max_len
+        )
+
+    # 3. Split dataset into training, validation, and test sets
+    # Standard split: 70% train, 15% validation, 15% test
+    total_size = len(full_dataset)
+    train_size = int(0.7 * total_size)
+    val_size = int(0.15 * total_size)
+    test_size = total_size - train_size - val_size
+
+    train_dataset, val_dataset, test_dataset = random_split(
+        full_dataset,
+        [train_size, val_size, test_size],
+        generator=torch.Generator().manual_seed(42)  # Reproducible split
     )
 
-    # 3. Split dataset into training and validation
-    train_size = int(0.8 * len(full_dataset))
-    val_size = len(full_dataset) - train_size
-    train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
+    print(f"Dataset split (total: {total_size}):")
+    print(f"  Training set:   {len(train_dataset)} ({len(train_dataset)/total_size*100:.1f}%)")
+    print(f"  Validation set: {len(val_dataset)} ({len(val_dataset)/total_size*100:.1f}%)")
+    print(f"  Test set:       {len(test_dataset)} ({len(test_dataset)/total_size*100:.1f}%)")
+    print(f"\nNote: Test set is reserved for final evaluation only.")
 
-    print(f"Training set size: {len(train_dataset)}")
-    print(f"Validation set size: {len(val_dataset)}")
-
-    # 4. Create DataLoaders
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=10)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=10)
+    # 4. Create DataLoaders with optimizations
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=10,
+        pin_memory=True,      # Faster GPU transfer
+        prefetch_factor=4,    # More aggressive prefetching
+        persistent_workers=True  # Keep workers alive between epochs
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=10,
+        pin_memory=True,
+        prefetch_factor=4,
+        persistent_workers=True
+    )
+    # Test loader is created but NOT used during training (reserved for final evaluation)
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=10,
+        pin_memory=True,
+        prefetch_factor=4,
+        persistent_workers=True
+    )
 
     # 5. Initialize Model, Loss, and Optimizer
     print(f"Initializing model with {args.backbone} backbone...")
@@ -104,6 +226,24 @@ def train(args):
 
     print("Finished Training.")
 
+    # Evaluate on test set if requested
+    if args.evaluate_test:
+        print("\nLoading best model for test evaluation...")
+        model.load_state_dict(torch.load(os.path.join(args.save_dir, 'siamese_regressor.pth')))
+        test_metrics = evaluate_on_test_set(model, test_loader, criterion, device)
+
+        # Save test metrics
+        test_metrics_path = os.path.join(args.save_dir, 'test_metrics.txt')
+        with open(test_metrics_path, 'w') as f:
+            f.write("Final Test Set Evaluation\n")
+            f.write("=" * 40 + "\n")
+            for metric, value in test_metrics.items():
+                f.write(f"{metric}: {value:.6f}\n")
+        print(f"\nTest metrics saved to {test_metrics_path}")
+    else:
+        print("\nSkipping test set evaluation (use --evaluate-test to run it).")
+        print("Test set is preserved for later evaluation.")
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train a Siamese Regressor for evolutionary distance prediction.")
     parser.add_argument('--num_samples', type=int, default=100000, help='Number of synthetic pairs to generate.')
@@ -116,6 +256,8 @@ if __name__ == '__main__':
     parser.add_argument('--patience', type=int, default=5, help='Patience for early stopping.')
     parser.add_argument('--unfreeze-backbone', action='store_true', help='If set, the backbone will be trained as well.')
     parser.add_argument('--save_dir', type=str, default='models', help='Directory to save the trained model.')
+    parser.add_argument('--cache_dir', type=str, default='data/siamese_cache', help='Directory to load the cached dataset from.')
+    parser.add_argument('--evaluate-test', action='store_true', help='If set, evaluate on test set after training completes.')
 
     args = parser.parse_args()
     train(args)
