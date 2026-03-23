@@ -9,7 +9,7 @@ import os
 import h5py
 
 
-from biomodelml.simulation import SyntheticEvolutionGenerator
+from biomodelml.simulation import get_generator
 from biomodelml.matrices import build_matrix
 
 class SiameseEvolutionDataset(Dataset):
@@ -19,31 +19,45 @@ class SiameseEvolutionDataset(Dataset):
     1. On-the-fly generation (for small tests).
     2. Loading from a pre-generated HDF5 cache (for training).
     """
-    def __init__(self, generator=None, num_samples=100000, max_len=500, transform=None, cache_dir=None):
+    def __init__(self, generator=None, num_samples=100000, max_len=500, transform=None, cache_dir=None, seq_type='N'):
         """
         Args:
-            generator (SyntheticEvolutionGenerator, optional): The data generator instance.
+            generator (Generator, optional): The data generator instance.
             num_samples (int): The total number of samples.
             max_len (int): The maximum sequence length for padding matrices.
             transform (callable, optional): Optional transform to be applied on a sample.
             cache_dir (str, optional): Directory to load pre-generated HDF5 dataset from.
+            seq_type (str): 'N' for nucleotide or 'P' for protein (default: 'N').
         """
         self.generator = generator
         self.num_samples = num_samples
         self.max_len = max_len
         self.transform = transform
         self.cache_dir = cache_dir
+        self.seq_type = seq_type
         self.h5_file = None
         self.img1_dset = None
         self.img2_dset = None
         self.dist_dset = None
 
         if self.cache_dir:
-            # Check for HDF5 file
-            hdf5_path = os.path.join(self.cache_dir, "dataset.h5")
-            if os.path.exists(hdf5_path):
-                print(f"Using HDF5 cached dataset from: {hdf5_path}")
-                self.h5_file = h5py.File(hdf5_path, 'r')
+            # Check for new format: dataset_{seq_type}.h5
+            seq_type_name = 'nucleotide' if seq_type == 'N' else 'protein'
+            hdf5_path_new = os.path.join(self.cache_dir, f"dataset_{seq_type_name}.h5")
+            # Check for old format: dataset.h5 (backward compatibility)
+            hdf5_path_old = os.path.join(self.cache_dir, "dataset.h5")
+
+            if os.path.exists(hdf5_path_new):
+                print(f"Using HDF5 cached dataset from: {hdf5_path_new}")
+                self.h5_file = h5py.File(hdf5_path_new, 'r')
+                self.img1_dset = self.h5_file['img1']
+                self.img2_dset = self.h5_file['img2']
+                self.dist_dset = self.h5_file['dist']
+                self.num_samples = len(self.img1_dset)
+            elif os.path.exists(hdf5_path_old):
+                # Backward compatibility: use old format
+                print(f"Using HDF5 cached dataset from: {hdf5_path_old} (legacy format)")
+                self.h5_file = h5py.File(hdf5_path_old, 'r')
                 self.img1_dset = self.h5_file['img1']
                 self.img2_dset = self.h5_file['img2']
                 self.dist_dset = self.h5_file['dist']
@@ -54,7 +68,8 @@ class SiameseEvolutionDataset(Dataset):
                 self.file_list = sorted([os.path.join(self.cache_dir, f) for f in os.listdir(self.cache_dir) if f.endswith('.pt')])
                 self.num_samples = len(self.file_list)
         elif not self.generator:
-            raise ValueError("A generator must be provided if not using a cache.")
+            # Create generator if not provided
+            self.generator = get_generator(seq_type, seq_len=500)
 
     def __del__(self):
         """Close HDF5 file when dataset is deleted."""
@@ -101,7 +116,7 @@ class SiameseEvolutionDataset(Dataset):
         parent_seq, mutated_seq, distance = self.generator.generate_evolution_pair()
 
         def process_sequence(seq):
-            matrix = build_matrix(seq, seq, self.max_len, seq_type='N')
+            matrix = build_matrix(seq, seq, self.max_len, seq_type=self.seq_type)
             h, w, c = matrix.shape
 
             # Convert to tensor first (HWC -> CHW format)

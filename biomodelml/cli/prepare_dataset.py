@@ -6,6 +6,9 @@ import argparse
 import os
 from tqdm import tqdm
 import h5py
+from Bio import SeqIO
+from Bio.Seq import Seq
+from Bio.SeqRecord import SeqRecord
 
 from biomodelml.simulation import SyntheticEvolutionGenerator
 from biomodelml.matrices import build_matrix

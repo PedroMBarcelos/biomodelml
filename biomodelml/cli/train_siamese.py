@@ -257,6 +257,8 @@ if __name__ == '__main__':
     parser.add_argument('--unfreeze-backbone', action='store_true', help='If set, the backbone will be trained as well.')
     parser.add_argument('--save_dir', type=str, default='models', help='Directory to save the trained model.')
     parser.add_argument('--cache_dir', type=str, default='data/siamese_cache', help='Directory to load the cached dataset from.')
+    parser.add_argument('--seq_type', type=str, default='N', choices=['N', 'P'],
+                        help='Sequence type: N=nucleotide, P=protein (default: N)')
     parser.add_argument('--evaluate-test', action='store_true', help='If set, evaluate on test set after training completes.')
 
     args = parser.parse_args()

@@ -33,7 +33,7 @@ def evaluate(args):
 
     # 2. Load Dataset
     print("Loading dataset...")
-    full_dataset = SiameseEvolutionDataset(cache_dir=args.cache_dir)
+    full_dataset = SiameseEvolutionDataset(cache_dir=args.cache_dir, seq_type=args.seq_type)
 
     # 3. Split dataset (same split as training with same seed for reproducibility)
     total_size = len(full_dataset)
