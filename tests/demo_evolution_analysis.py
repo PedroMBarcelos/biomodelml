@@ -370,11 +370,150 @@ def save_mutation_history(root: EvolutionaryNode, output_path: Path) -> None:
             ],
             'children': [node_to_dict(child) for child in node.children]
         }
-    
+
     history = node_to_dict(root)
-    
+
     with open(output_path, 'w') as f:
         json.dump(history, f, indent=2)
+
+
+def get_path_to_root(node: EvolutionaryNode) -> List[EvolutionaryNode]:
+    """Get the path from a node to the root"""
+    path = []
+    current = node
+    while current is not None:
+        path.append(current)
+        current = current.parent
+    return path
+
+
+def calculate_tree_distance(node1: EvolutionaryNode, node2: EvolutionaryNode) -> float:
+    """
+    Calculate the evolutionary distance between two nodes based on tree topology
+
+    Returns the sum of branch lengths along the path connecting the two nodes
+    """
+    if node1 == node2:
+        return 0.0
+
+    # Get paths to root for both nodes
+    path1 = get_path_to_root(node1)
+    path2 = get_path_to_root(node2)
+
+    # Find the most recent common ancestor (MRCA) using object identity
+    path1_ids = {id(node): node for node in path1}
+    mrca = None
+    for node in path2:
+        if id(node) in path1_ids:
+            mrca = node
+            break
+
+    if mrca is None:
+        raise ValueError("Nodes are not in the same tree")
+
+    # Calculate distance: sum of branch lengths from node1 to MRCA and node2 to MRCA
+    distance = 0.0
+
+    # Distance from node1 to MRCA
+    current = node1
+    while current != mrca:
+        distance += current.branch_length
+        current = current.parent
+
+    # Distance from node2 to MRCA
+    current = node2
+    while current != mrca:
+        distance += current.branch_length
+        current = current.parent
+
+    return distance
+
+
+def calculate_sequence_distance(seq1: str, seq2: str) -> Tuple[int, float]:
+    """
+    Calculate sequence-based distance metrics
+
+    Returns:
+        Tuple of (hamming_distance, percent_identity)
+    """
+    # Handle sequences of different lengths by aligning to shorter
+    min_len = min(len(seq1), len(seq2))
+    max_len = max(len(seq1), len(seq2))
+
+    # Count matching positions in overlapping region
+    matches = sum(1 for i in range(min_len) if seq1[i] == seq2[i])
+
+    # Hamming distance includes mismatches + length differences
+    hamming = (min_len - matches) + (max_len - min_len)
+
+    # Percent identity relative to longer sequence
+    percent_identity = (matches / max_len * 100) if max_len > 0 else 100.0
+
+    return hamming, percent_identity
+
+
+def save_distance_matrices(leaves: List[EvolutionaryNode], output_dir: Path) -> None:
+    """
+    Calculate and save pairwise distance matrices
+
+    Saves two CSV files:
+    - true_distances.csv: Evolutionary distances based on tree topology
+    - sequence_distances.csv: Sequence similarity metrics
+    """
+    import csv
+
+    n = len(leaves)
+    leaf_names = [leaf.name for leaf in leaves]
+
+    # Calculate evolutionary distances (tree-based)
+    tree_distances = [[0.0] * n for _ in range(n)]
+    for i in range(n):
+        for j in range(i + 1, n):
+            dist = calculate_tree_distance(leaves[i], leaves[j])
+            tree_distances[i][j] = dist
+            tree_distances[j][i] = dist
+
+    # Save tree-based distances
+    tree_dist_path = output_dir / "true_distances.csv"
+    with open(tree_dist_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow([''] + leaf_names)
+        for i, name in enumerate(leaf_names):
+            writer.writerow([name] + [f"{tree_distances[i][j]:.4f}" for j in range(n)])
+
+    print(f"  ✓ True evolutionary distances: {tree_dist_path}")
+
+    # Calculate sequence-based distances
+    hamming_distances = [[0] * n for _ in range(n)]
+    percent_identities = [[100.0] * n for _ in range(n)]
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            hamming, pct_id = calculate_sequence_distance(leaves[i].sequence, leaves[j].sequence)
+            hamming_distances[i][j] = hamming
+            hamming_distances[j][i] = hamming
+            percent_identities[i][j] = pct_id
+            percent_identities[j][i] = pct_id
+
+    # Save Hamming distances
+    hamming_path = output_dir / "sequence_distances_hamming.csv"
+    with open(hamming_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow([''] + leaf_names)
+        for i, name in enumerate(leaf_names):
+            writer.writerow([name] + [str(hamming_distances[i][j]) for j in range(n)])
+
+    print(f"  ✓ Hamming distances: {hamming_path}")
+
+    # Save percent identities
+    identity_path = output_dir / "sequence_identities.csv"
+    with open(identity_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow([''] + leaf_names)
+        for i, name in enumerate(leaf_names):
+            writer.writerow([name] + [f"{percent_identities[i][j]:.2f}" for j in range(n)])
+
+    print(f"  ✓ Percent identities: {identity_path}")
 
 
 def run_biomodelml_analysis(fasta_path: Path, output_dir: Path, 
@@ -892,15 +1031,18 @@ Examples:
     fasta_path = args.output / "evolved_sequences.fasta"
     save_sequences_fasta(leaves, fasta_path)
     print(f"  ✓ FASTA file: {fasta_path}")
-    
+
     true_tree_path = args.output / "true_tree.nw"
     with open(true_tree_path, 'w') as f:
         f.write(tree_to_newick(tree_root, include_inner_labels=True))
     print(f"  ✓ True phylogeny: {true_tree_path}")
-    
+
     mutation_history_path = args.output / "evolution_history.json"
     save_mutation_history(tree_root, mutation_history_path)
     print(f"  ✓ Mutation history: {mutation_history_path}")
+
+    # Calculate and save pairwise distances
+    save_distance_matrices(leaves, args.output)
     
     # Step 5: Run biomodelml analysis
     inferred_tree_paths = None
@@ -999,11 +1141,13 @@ Examples:
     
     print("\nNext steps:")
     print(f"  1. View the true phylogeny: cat {true_tree_path}")
-    print(f"  2. Compare with reconstructed trees: ls {args.output}/*.nw")
-    print(f"  3. View distance matrices: ls {args.output}/*.csv")
-    print(f"  4. Check mutation history: cat {mutation_history_path}")
+    print(f"  2. Check true evolutionary distances: cat {args.output}/true_distances.csv")
+    print(f"  3. Check sequence distances: cat {args.output}/sequence_distances_hamming.csv")
+    print(f"  4. Compare with reconstructed trees: ls {args.output}/*.nw")
+    print(f"  5. View inferred distance matrices: ls {args.output}/*.csv")
+    print(f"  6. Check mutation history: cat {mutation_history_path}")
     if args.profile:
-        print(f"  5. View performance profile: cat {args.output}/performance_profile.json")
+        print(f"  7. View performance profile: cat {args.output}/performance_profile.json")
     print("\nTo run tree comparison:")
     print(f"  python tests/tree_comparison.py {true_tree_path} {args.output}/*.nw")
 
