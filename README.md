@@ -7,7 +7,7 @@
 
 By representing sequences as image tensors, BioModelML allows researchers to bypass traditional string-matching algorithms and directly apply state-of-the-art deep learning architectures to complex biological problems.
 
-## 🧬 The Paradigm: Generate Once, Predict Anything
+##  The Paradigm: Generate Once, Predict Anything
 
 The core philosophy of BioModelML is **task-agnostic representation**. 
 
@@ -16,7 +16,7 @@ Instead of building separate string-processing pipelines for different biologica
 * **Currently Implemented:** Phylogenetic tree reconstruction and evolutionary distance mapping.
 * **Future Expansions:** 3D structure elucidation, functional prediction, and motif discovery. 
 
-## 🔬 How It Works: The Encoding
+##  How It Works: The Encoding
 
 BioModelML converts sequences into RGB image matrices where each pixel `(i, j)` encodes the specific biochemical and structural relationship between position `i` and `j`. 
 
@@ -30,7 +30,7 @@ BioModelML converts sequences into RGB image matrices where each pixel `(i, j)` 
 - **Green Channel:** Self-comparison (identity)
 - **Blue Channel:** Sneath index scores (biochemical/hydrophobic similarity)
 
-## 📦 Installation
+##  Installation
 
 ```bash
 # Basic installation (Core encoding generation)
@@ -43,7 +43,7 @@ pip install biomodelml[full]
 pip install biomodelml[gpu]
 ```
 
-## 🚀 Usage
+##  Usage
 
 ### 1. The Core Pipeline: Sequence to Matrix
 
@@ -98,7 +98,7 @@ experiment_optflow = Experiment(
 experiment_optflow.run_and_save()
 ```
 
-## 🧠 Available Task Models (Phylogeny)
+##  Available Task Models (Phylogeny)
 
 BioModelML currently includes several baseline and advanced algorithms for comparing sequence-images to infer evolutionary distance:
 
@@ -138,7 +138,7 @@ biomodelml-tree mysequences.fasta.N.sanitized results/ N \
 
 *(Traditional string-alignment methods like Needleman-Wunsch and Smith-Waterman are also included for benchmarking purposes).*
 
-## 📖 Documentation & Support
+##  Documentation & Support
 
 - **CLI Help**: Run any command with the `--help` flag (e.g., `biomodelml-tree --help`).
 - **Examples**: Check the `notebooks/` directory for Jupyter tutorials on integrating BioModelML matrices with custom PyTorch training loops.
@@ -148,7 +148,7 @@ biomodelml-tree mysequences.fasta.N.sanitized results/ N \
 
 Contributions are welcome! If you have developed a new deep learning model that utilizes BioModelML matrices for a novel downstream task, please see `CONTRIBUTING.md` to add it to the framework.
 
-## 📄 License & Citation
+##  License & Citation
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
