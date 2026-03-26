@@ -28,6 +28,7 @@ import torch
 import torch.nn.functional as F
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
+from Bio import SeqIO
 
 import sys
 import os
@@ -262,6 +263,41 @@ def evolve_tree_pyvolve(root: TreeNode, seq_len: int, alphabet: str = 'ACGT') ->
     assign_sequences(root)
 
 
+def save_tree_sequences_fasta(leaves: List[TreeNode], tree_idx: int,
+                               output_path: Path) -> None:
+    """
+    Save leaf sequences from a tree to FASTA file using BioPython.
+
+    Creates a FASTA file with one sequence per leaf node, including metadata
+    in headers for tree index, branch length, and leaf position.
+
+    Args:
+        leaves: List of leaf nodes with sequences
+        tree_idx: Index of the tree in the dataset
+        output_path: Base output path (will create _tree_XXXX.fasta files)
+    """
+    # Construct FASTA filename
+    base_name = output_path.stem  # e.g., "evolutionary_10k"
+    fasta_path = output_path.parent / f"{base_name}_tree_{tree_idx:04d}.fasta"
+
+    # Create SeqRecord objects with metadata
+    records = []
+    for leaf_idx, leaf in enumerate(leaves):
+        # Build metadata-rich header
+        record_id = leaf.name
+        description = f"tree={tree_idx} branch_len={leaf.branch_length:.6f} leaf_idx={leaf_idx}"
+
+        record = SeqRecord(
+            Seq(leaf.sequence),
+            id=record_id,
+            description=description
+        )
+        records.append(record)
+
+    # Write to FASTA file
+    SeqIO.write(records, fasta_path, "fasta")
+
+
 def process_sequence_4ch(seq: str, max_len: int, seq_type: str = 'N') -> np.ndarray:
     """
     Process a sequence into a 4-channel tensor (RGB + Mask).
@@ -394,6 +430,10 @@ def generate_dataset(args):
             # Get all leaf nodes (taxa)
             leaves = root.get_all_leaves()
 
+            # Save sequences to FASTA if requested
+            if args.save_fasta:
+                save_tree_sequences_fasta(leaves, tree_idx, output_path)
+
             # Generate all pairwise combinations
             pairs_to_add = []
 
@@ -431,6 +471,8 @@ def generate_dataset(args):
     print(f"Dataset generation complete!")
     print(f"Saved to: {output_path}")
     print(f"Total pairs: {current_idx}")
+    if args.save_fasta:
+        print(f"FASTA files: {args.num_trees} files in {output_path.parent}/")
     print("=" * 70)
 
     # Print distance statistics
@@ -472,6 +514,8 @@ if __name__ == '__main__':
                         help='Output HDF5 file path')
     parser.add_argument('--seed', type=int, default=None,
                         help='Random seed for reproducibility')
+    parser.add_argument('--save-fasta', action='store_true',
+                        help='Save sequences to FASTA files (one per tree)')
 
     args = parser.parse_args()
 
