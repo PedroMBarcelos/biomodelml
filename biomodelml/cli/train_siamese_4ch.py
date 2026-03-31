@@ -35,6 +35,10 @@ from biomodelml.datasets_4ch import SiameseEvolutionDataset4Channel
 from biomodelml.models_4ch import SiameseRegressor4Channel
 
 
+DEFAULT_GTR_RATES = (1.0, 2.0, 1.0, 1.0, 2.0, 1.0)
+DEFAULT_BASE_FREQS = (0.25, 0.25, 0.25, 0.25)
+
+
 def evaluate_on_test_set(model, test_loader, criterion, device):
     """
     Evaluate the model on the test set (final evaluation after training).
@@ -143,7 +147,20 @@ def train(args):
     else:
         # On-the-fly generation
         print("No cache file specified. Generating data on-the-fly.")
-        generator = get_generator(args.seq_type, seq_len=args.seq_len)
+        generator = get_generator(
+            args.seq_type,
+            seq_len=args.seq_len,
+            max_len=args.max_len,
+            model_name=args.model_name,
+            kappa=args.kappa,
+            gtr_rates=tuple(args.gtr_rates),
+            base_freqs=tuple(args.base_freqs),
+            gamma_alpha=args.gamma_alpha,
+            gamma_categories=args.gamma_categories,
+            p_invariant=args.p_invariant,
+            indel_rate=args.indel_rate,
+            indel_size=args.indel_size,
+        )
         full_dataset = SiameseEvolutionDataset4Channel(
             generator=generator,
             num_samples=args.num_samples,
@@ -385,6 +402,30 @@ if __name__ == '__main__':
     parser.add_argument('--seq-type', type=str, default='N', choices=['N', 'P'],
                         help='Sequence type: N=nucleotide, P=protein')
 
+    # On-the-fly nucleotide evolution parameters (ignored when --cache-file is used)
+    parser.add_argument('--model-name', type=str, default='gtr', choices=['gtr', 'hky85'],
+                        help='Nucleotide substitution model used in on-the-fly generation')
+    parser.add_argument('--kappa', type=float, default=4.0,
+                        help='Transition/transversion ratio for HKY85 mode')
+    parser.add_argument('--gtr-rates', type=float, nargs=6,
+                        default=list(DEFAULT_GTR_RATES),
+                        metavar=('AC', 'AG', 'AT', 'CG', 'CT', 'GT'),
+                        help='Six exchangeability rates for GTR model')
+    parser.add_argument('--base-freqs', type=float, nargs=4,
+                        default=list(DEFAULT_BASE_FREQS),
+                        metavar=('A', 'C', 'G', 'T'),
+                        help='Base frequencies used by HKY85/GTR models')
+    parser.add_argument('--gamma-alpha', type=float, default=0.5,
+                        help='Alpha parameter for discrete gamma rate heterogeneity')
+    parser.add_argument('--gamma-categories', type=int, default=4,
+                        help='Number of discrete gamma rate categories')
+    parser.add_argument('--p-invariant', type=float, default=0.1,
+                        help='Proportion of invariant sites')
+    parser.add_argument('--indel-rate', type=float, default=0.0005,
+                        help='Indel rate for on-the-fly nucleotide evolution')
+    parser.add_argument('--indel-size', type=int, default=1,
+                        help='Default indel event size in on-the-fly evolution')
+
     # Model parameters
     parser.add_argument('--backbone', type=str, default='resnet50',
                         choices=['resnet50', 'efficientnet_b0'],
@@ -422,6 +463,22 @@ if __name__ == '__main__':
     # Validate arguments
     if args.cache_file and not os.path.exists(args.cache_file):
         print(f"Error: Cache file not found: {args.cache_file}")
+        sys.exit(1)
+
+    if abs(sum(args.base_freqs) - 1.0) > 1e-6:
+        print("Error: --base-freqs must sum to 1.0")
+        sys.exit(1)
+
+    if not (0.0 <= args.p_invariant < 1.0):
+        print("Error: --p-invariant must be in [0.0, 1.0)")
+        sys.exit(1)
+
+    if args.gamma_categories < 1:
+        print("Error: --gamma-categories must be >= 1")
+        sys.exit(1)
+
+    if args.indel_size < 1:
+        print("Error: --indel-size must be >= 1")
         sys.exit(1)
 
     train(args)

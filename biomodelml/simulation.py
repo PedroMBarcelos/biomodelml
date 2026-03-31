@@ -3,6 +3,10 @@ import random
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 
+
+DEFAULT_GTR_RATES = (1.0, 2.0, 1.0, 1.0, 2.0, 1.0)
+DEFAULT_BASE_FREQS = (0.25, 0.25, 0.25, 0.25)
+
 # Amino acid alphabet and properties for protein evolution
 AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWY"
 HYDROPHOBIC = set("AVILMFYWP")
@@ -178,7 +182,21 @@ class SyntheticEvolutionGenerator:
     sequences along with their evolutionary distance. This data is crucial for
     training the Siamese network when empirical data is scarce.
     """
-    def __init__(self, alphabet='ACGT', seq_len=500):
+    def __init__(
+        self,
+        alphabet='ACGT',
+        seq_len=500,
+        model_name='gtr',
+        kappa=4.0,
+        gtr_rates=DEFAULT_GTR_RATES,
+        base_freqs=DEFAULT_BASE_FREQS,
+        gamma_alpha=0.5,
+        gamma_categories=4,
+        p_invariant=0.1,
+        indel_rate=0.0005,
+        indel_size=1,
+        max_len=None
+    ):
         """
         Initializes the generator.
         Args:
@@ -187,12 +205,107 @@ class SyntheticEvolutionGenerator:
         """
         self.alphabet = alphabet
         self.seq_len = seq_len
+        self.model_name = model_name.lower()
+        self.kappa = float(kappa)
+        self.gtr_rates = tuple(gtr_rates)
+        self.base_freqs = tuple(base_freqs)
+        self.gamma_alpha = float(gamma_alpha)
+        self.gamma_categories = int(gamma_categories)
+        self.p_invariant = float(p_invariant)
+        self.indel_rate = float(indel_rate)
+        self.indel_size = max(1, int(indel_size))
+        self.max_len = int(max_len) if max_len is not None else None
+        self._pyvolve_indel_supported = False
         self.model = self._get_model()
 
     def _get_model(self):
         """Returns a nucleotide substitution model for Pyvolve."""
-        # Using the HKY85 model as a reasonable default for nucleotide evolution
-        return pyvolve.Model("nucleotide", {"kappa": 4.0})
+        if self.model_name == 'hky85':
+            params = {
+                "kappa": self.kappa,
+                "state_freqs": list(self.base_freqs),
+                "alpha": self.gamma_alpha,
+                "num_categories": self.gamma_categories,
+                "pinv": self.p_invariant,
+            }
+            return pyvolve.Model("nucleotide", params)
+
+        if self.model_name == 'gtr':
+            params = {
+                "mu": {
+                    "AC": self.gtr_rates[0],
+                    "AG": self.gtr_rates[1],
+                    "AT": self.gtr_rates[2],
+                    "CG": self.gtr_rates[3],
+                    "CT": self.gtr_rates[4],
+                    "GT": self.gtr_rates[5],
+                },
+                "state_freqs": list(self.base_freqs),
+                "alpha": self.gamma_alpha,
+                "num_categories": self.gamma_categories,
+                "pinv": self.p_invariant,
+            }
+            return pyvolve.Model("nucleotide", params)
+
+        raise ValueError(f"Unsupported model_name: {self.model_name}. Use 'gtr' or 'hky85'.")
+
+    def _build_partition(self):
+        """
+        Build a Pyvolve partition, attempting indel-aware parameters first.
+
+        Some Pyvolve versions expose different indel option names. We attempt
+        a best-effort indel setup and gracefully fall back to substitution-only.
+        """
+        base_kwargs = {"models": self.model, "size": self.seq_len}
+        indel_kwargs = {
+            "indel_rate": self.indel_rate,
+            "indel_size": self.indel_size,
+        }
+
+        if self.indel_rate <= 0:
+            self._pyvolve_indel_supported = False
+            return pyvolve.Partition(**base_kwargs)
+
+        try:
+            self._pyvolve_indel_supported = True
+            return pyvolve.Partition(**base_kwargs, **indel_kwargs)
+        except TypeError:
+            self._pyvolve_indel_supported = False
+            print("Warning: This Pyvolve build does not expose indel Partition options; continuing without Pyvolve-managed indels.")
+            return pyvolve.Partition(**base_kwargs)
+
+    def _apply_fallback_indels(self, seq):
+        """Apply lightweight indels if Pyvolve-level indels are unavailable."""
+        if self.indel_rate <= 0:
+            return seq
+
+        seq_list = list(seq)
+        expected_indels = int(max(0, len(seq_list) * self.indel_rate))
+        n_events = max(0, int(random.gauss(expected_indels, (expected_indels + 1) ** 0.5)))
+
+        for _ in range(n_events):
+            if not seq_list:
+                break
+            is_deletion = random.random() < 0.5 and len(seq_list) > 10
+            if is_deletion:
+                del_size = min(self.indel_size, len(seq_list) - 1)
+                if del_size <= 0:
+                    continue
+                pos = random.randint(0, len(seq_list) - del_size)
+                del seq_list[pos:pos + del_size]
+            else:
+                ins_size = self.indel_size
+                pos = random.randint(0, len(seq_list))
+                ins = [random.choice(self.alphabet) for _ in range(ins_size)]
+                seq_list[pos:pos] = ins
+
+        return ''.join(seq_list)
+
+    def _clamp_sequence_len(self, seq):
+        """Clamp sequence length so downstream matrix generation remains valid."""
+        if self.max_len is None:
+            return seq
+        return seq[:self.max_len]
 
     def _generate_random_sequence(self):
         """Generates a single random DNA sequence."""
@@ -218,7 +331,7 @@ class SyntheticEvolutionGenerator:
         tree = pyvolve.read_tree(tree=tree_str)
 
         # 3. Set up the partition
-        partition = pyvolve.Partition(models=self.model, size=self.seq_len)
+        partition = self._build_partition()
 
         # 4. Evolve the sequence
         evolver = pyvolve.Evolver(
@@ -232,6 +345,11 @@ class SyntheticEvolutionGenerator:
         # The evolved sequences are stored in evolver.get_sequences()
         # We need to find the one that is not the parent.
         mutated_seq_str = evolver.get_sequences(anc=False)['mutated']
+        if self.indel_rate > 0 and not self._pyvolve_indel_supported:
+            mutated_seq_str = self._apply_fallback_indels(mutated_seq_str)
+        mutated_seq_str = self._clamp_sequence_len(mutated_seq_str)
+        parent_seq_str = self._clamp_sequence_len(parent_seq_str)
+        parent_seq_record = SeqRecord(Seq(parent_seq_str), id="parent")
         mutated_seq_record = SeqRecord(Seq(mutated_seq_str), id="mutated")
 
         return parent_seq_record, mutated_seq_record, distance

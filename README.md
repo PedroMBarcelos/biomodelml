@@ -144,7 +144,7 @@ biomodelml-tree mysequences.fasta.N.sanitized results/ N \
 - **Examples**: Check the `notebooks/` directory for Jupyter tutorials on integrating BioModelML matrices with custom PyTorch training loops.
 - **Issues**: [GitHub Issues](https://github.com/yourusername/biomodelml/issues)
 
-## 🤝 Contributing
+##  Contributing
 
 Contributions are welcome! If you have developed a new deep learning model that utilizes BioModelML matrices for a novel downstream task, please see `CONTRIBUTING.md` to add it to the framework.
 

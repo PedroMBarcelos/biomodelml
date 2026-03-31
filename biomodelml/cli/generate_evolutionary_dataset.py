@@ -42,6 +42,10 @@ if str(PROJECT_ROOT) not in sys.path:
 from biomodelml.matrices import build_matrix
 
 
+DEFAULT_GTR_RATES = (1.0, 2.0, 1.0, 1.0, 2.0, 1.0)
+DEFAULT_BASE_FREQS = (0.25, 0.25, 0.25, 0.25)
+
+
 class TreeNode:
     """
     Simple tree node for phylogenetic trees.
@@ -219,7 +223,21 @@ def calculate_tree_distance(node1: TreeNode, node2: TreeNode) -> float:
     return distance
 
 
-def evolve_tree_pyvolve(root: TreeNode, seq_len: int, alphabet: str = 'ACGT') -> None:
+def evolve_tree_pyvolve(
+    root: TreeNode,
+    seq_len: int,
+    alphabet: str = 'ACGT',
+    model_name: str = 'gtr',
+    kappa: float = 4.0,
+    gtr_rates: Tuple[float, float, float, float, float, float] = DEFAULT_GTR_RATES,
+    base_freqs: Tuple[float, float, float, float] = DEFAULT_BASE_FREQS,
+    gamma_alpha: float = 0.5,
+    gamma_categories: int = 4,
+    p_invariant: float = 0.1,
+    indel_rate: float = 0.0005,
+    indel_size: int = 1,
+    max_len: Optional[int] = None
+) -> None:
     """
     Evolve sequences down the tree using Pyvolve.
 
@@ -239,9 +257,50 @@ def evolve_tree_pyvolve(root: TreeNode, seq_len: int, alphabet: str = 'ACGT') ->
     # Parse tree with Pyvolve
     pyv_tree = pyvolve.read_tree(tree=newick_str)
 
-    # Set up evolution model (HKY85 for DNA)
-    model = pyvolve.Model("nucleotide", {"kappa": 4.0})
-    partition = pyvolve.Partition(models=model, size=seq_len)
+    # Set up evolution model (GTR+G+I default, HKY85 optional)
+    model_name = model_name.lower()
+    if model_name == 'hky85':
+        model_params = {
+            "kappa": float(kappa),
+            "state_freqs": list(base_freqs),
+            "alpha": float(gamma_alpha),
+            "num_categories": int(gamma_categories),
+            "pinv": float(p_invariant),
+        }
+    elif model_name == 'gtr':
+        model_params = {
+            "mu": {
+                "AC": float(gtr_rates[0]),
+                "AG": float(gtr_rates[1]),
+                "AT": float(gtr_rates[2]),
+                "CG": float(gtr_rates[3]),
+                "CT": float(gtr_rates[4]),
+                "GT": float(gtr_rates[5]),
+            },
+            "state_freqs": list(base_freqs),
+            "alpha": float(gamma_alpha),
+            "num_categories": int(gamma_categories),
+            "pinv": float(p_invariant),
+        }
+    else:
+        raise ValueError(f"Unsupported model_name: {model_name}. Use 'gtr' or 'hky85'.")
+
+    model = pyvolve.Model("nucleotide", model_params)
+    indel_supported = False
+    if indel_rate > 0:
+        try:
+            partition = pyvolve.Partition(
+                models=model,
+                size=seq_len,
+                indel_rate=float(indel_rate),
+                indel_size=max(1, int(indel_size)),
+            )
+            indel_supported = True
+        except TypeError:
+            print("Warning: This Pyvolve version does not expose indel Partition options; running substitution-only evolution.")
+            partition = pyvolve.Partition(models=model, size=seq_len)
+    else:
+        partition = pyvolve.Partition(models=model, size=seq_len)
 
     # Evolve
     evolver = pyvolve.Evolver(
@@ -254,9 +313,40 @@ def evolve_tree_pyvolve(root: TreeNode, seq_len: int, alphabet: str = 'ACGT') ->
     # Extract sequences and assign to nodes
     evolved_seqs = evolver.get_sequences(anc=True)  # Get all sequences including ancestors
 
+    def apply_fallback_indels(seq: str) -> str:
+        if indel_rate <= 0:
+            return seq
+
+        seq_list = list(seq)
+        expected_indels = int(max(0, len(seq_list) * indel_rate))
+        n_events = max(0, int(random.gauss(expected_indels, (expected_indels + 1) ** 0.5)))
+
+        for _ in range(n_events):
+            if not seq_list:
+                break
+            is_deletion = random.random() < 0.5 and len(seq_list) > 10
+            if is_deletion:
+                del_size = min(max(1, int(indel_size)), len(seq_list) - 1)
+                if del_size <= 0:
+                    continue
+                pos = random.randint(0, len(seq_list) - del_size)
+                del seq_list[pos:pos + del_size]
+            else:
+                ins_size = max(1, int(indel_size))
+                pos = random.randint(0, len(seq_list))
+                ins = [random.choice(alphabet) for _ in range(ins_size)]
+                seq_list[pos:pos] = ins
+
+        return ''.join(seq_list)
+
     def assign_sequences(node):
         if node.name in evolved_seqs:
-            node.sequence = evolved_seqs[node.name]
+            seq = evolved_seqs[node.name]
+            if indel_rate > 0 and not indel_supported:
+                seq = apply_fallback_indels(seq)
+            if max_len is not None:
+                seq = seq[:max_len]
+            node.sequence = seq
         for child in node.children:
             assign_sequences(child)
 
@@ -310,6 +400,10 @@ def process_sequence_4ch(seq: str, max_len: int, seq_type: str = 'N') -> np.ndar
     Returns:
         4-channel tensor of shape (4, max_len, max_len) as float32
     """
+    # Keep fixed-size tensors valid even if indels increase sequence length.
+    if len(seq) > max_len:
+        seq = seq[:max_len]
+
     # Build self-comparison matrix
     seq_obj = Seq(seq)
     matrix = build_matrix(seq_obj, seq_obj, max_len, seq_type=seq_type)
@@ -368,6 +462,8 @@ def generate_dataset(args):
     print(f"  Number of taxa:        {args.n_taxa}")
     print(f"  Number of trees:       {args.num_trees}")
     print(f"  Sequence length:       {args.seq_len}")
+    print(f"  Evolution model:       {args.model_name.upper()}+G+I")
+    print(f"  Indel rate:            {args.indel_rate}")
     print(f"  Matrix size:           {args.max_len}×{args.max_len}")
     print(f"  Pairs per tree:        {pairs_per_tree}")
     print(f"  Total pairs:           {total_pairs}")
@@ -408,6 +504,15 @@ def generate_dataset(args):
         h5f.attrs['seq_len'] = args.seq_len
         h5f.attrs['max_len'] = args.max_len
         h5f.attrs['seq_type'] = args.seq_type
+        h5f.attrs['model_name'] = args.model_name
+        h5f.attrs['kappa'] = args.kappa
+        h5f.attrs['gtr_rates'] = np.asarray(args.gtr_rates, dtype=np.float32)
+        h5f.attrs['base_freqs'] = np.asarray(args.base_freqs, dtype=np.float32)
+        h5f.attrs['gamma_alpha'] = args.gamma_alpha
+        h5f.attrs['gamma_categories'] = args.gamma_categories
+        h5f.attrs['p_invariant'] = args.p_invariant
+        h5f.attrs['indel_rate'] = args.indel_rate
+        h5f.attrs['indel_size'] = args.indel_size
 
         current_idx = 0
 
@@ -425,7 +530,21 @@ def generate_dataset(args):
             )
 
             # Evolve sequences
-            evolve_tree_pyvolve(root, args.seq_len, alphabet='ACGT')
+            evolve_tree_pyvolve(
+                root,
+                args.seq_len,
+                alphabet='ACGT',
+                model_name=args.model_name,
+                kappa=args.kappa,
+                gtr_rates=tuple(args.gtr_rates),
+                base_freqs=tuple(args.base_freqs),
+                gamma_alpha=args.gamma_alpha,
+                gamma_categories=args.gamma_categories,
+                p_invariant=args.p_invariant,
+                indel_rate=args.indel_rate,
+                indel_size=args.indel_size,
+                max_len=args.max_len,
+            )
 
             # Get all leaf nodes (taxa)
             leaves = root.get_all_leaves()
@@ -509,6 +628,30 @@ if __name__ == '__main__':
     parser.add_argument('--seq-type', type=str, default='N', choices=['N', 'P'],
                         help='Sequence type: N=nucleotide, P=protein')
 
+    # Evolution model parameters
+    parser.add_argument('--model-name', type=str, default='gtr', choices=['gtr', 'hky85'],
+                        help='Nucleotide substitution model')
+    parser.add_argument('--kappa', type=float, default=4.0,
+                        help='Transition/transversion ratio for HKY85 mode')
+    parser.add_argument('--gtr-rates', type=float, nargs=6,
+                        default=list(DEFAULT_GTR_RATES),
+                        metavar=('AC', 'AG', 'AT', 'CG', 'CT', 'GT'),
+                        help='Six exchangeability rates for GTR model')
+    parser.add_argument('--base-freqs', type=float, nargs=4,
+                        default=list(DEFAULT_BASE_FREQS),
+                        metavar=('A', 'C', 'G', 'T'),
+                        help='Base frequencies used by HKY85/GTR models')
+    parser.add_argument('--gamma-alpha', type=float, default=0.5,
+                        help='Alpha parameter for discrete gamma rate heterogeneity')
+    parser.add_argument('--gamma-categories', type=int, default=4,
+                        help='Number of discrete gamma rate categories')
+    parser.add_argument('--p-invariant', type=float, default=0.1,
+                        help='Proportion of invariant sites (I component)')
+    parser.add_argument('--indel-rate', type=float, default=0.0005,
+                        help='Indel rate for nucleotide evolution')
+    parser.add_argument('--indel-size', type=int, default=1,
+                        help='Default indel event size')
+
     # Output parameters
     parser.add_argument('--output-path', type=str, default='data/evolutionary_10k.h5',
                         help='Output HDF5 file path')
@@ -522,6 +665,22 @@ if __name__ == '__main__':
     # Validate
     if args.n_taxa < 2:
         print("Error: n_taxa must be at least 2")
+        sys.exit(1)
+
+    if abs(sum(args.base_freqs) - 1.0) > 1e-6:
+        print("Error: --base-freqs must sum to 1.0")
+        sys.exit(1)
+
+    if not (0.0 <= args.p_invariant < 1.0):
+        print("Error: --p-invariant must be in [0.0, 1.0)")
+        sys.exit(1)
+
+    if args.gamma_categories < 1:
+        print("Error: --gamma-categories must be >= 1")
+        sys.exit(1)
+
+    if args.indel_size < 1:
+        print("Error: --indel-size must be >= 1")
         sys.exit(1)
 
     generate_dataset(args)

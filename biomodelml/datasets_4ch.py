@@ -198,6 +198,9 @@ class SiameseEvolutionDataset4Channel(Dataset):
         Returns:
             torch.Tensor: 4-channel tensor of shape (4, max_len, max_len)
         """
+        if len(seq) > self.max_len:
+            seq = seq[:self.max_len]
+
         # Step 1: Build RGB matrix
         matrix = build_matrix(seq, seq, self.max_len, seq_type=self.seq_type)
         h, w, c = matrix.shape
