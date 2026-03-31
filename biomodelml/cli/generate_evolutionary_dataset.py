@@ -257,9 +257,24 @@ def evolve_tree_pyvolve(
     # Parse tree with Pyvolve
     pyv_tree = pyvolve.read_tree(tree=newick_str)
 
-    # Set up evolution model (GTR+G+I default, HKY85 optional)
+    # Set up evolution model (GTR+G+I default, HKY85/JC69 optional)
     model_name = model_name.lower()
-    if model_name == 'hky85':
+    if model_name == 'jc69':
+        model_params = {
+            "mu": {
+                "AC": 1.0,
+                "AG": 1.0,
+                "AT": 1.0,
+                "CG": 1.0,
+                "CT": 1.0,
+                "GT": 1.0,
+            },
+            "state_freqs": [0.25, 0.25, 0.25, 0.25],
+            "alpha": float(gamma_alpha),
+            "num_categories": int(gamma_categories),
+            "pinv": float(p_invariant),
+        }
+    elif model_name == 'hky85':
         model_params = {
             "kappa": float(kappa),
             "state_freqs": list(base_freqs),
@@ -283,7 +298,7 @@ def evolve_tree_pyvolve(
             "pinv": float(p_invariant),
         }
     else:
-        raise ValueError(f"Unsupported model_name: {model_name}. Use 'gtr' or 'hky85'.")
+        raise ValueError(f"Unsupported model_name: {model_name}. Use 'jc69', 'gtr', or 'hky85'.")
 
     model = pyvolve.Model("nucleotide", model_params)
     indel_supported = False
@@ -462,8 +477,18 @@ def generate_dataset(args):
     print(f"  Number of taxa:        {args.n_taxa}")
     print(f"  Number of trees:       {args.num_trees}")
     print(f"  Sequence length:       {args.seq_len}")
-    print(f"  Evolution model:       {args.model_name.upper()}+G+I")
-    print(f"  Indel rate:            {args.indel_rate}")
+    model_desc = "randomized per tree" if args.randomize_model else f"{args.model_name.upper()}+G+I"
+    print(f"  Evolution model:       {model_desc}")
+    if args.randomize_model:
+        print(f"  Model pool:            {', '.join(m.upper() for m in args.model_pool)}")
+    if args.randomize_base_freqs:
+        print(f"  Base freqs:            randomized (Dirichlet conc {args.base_freq_conc_min}..{args.base_freq_conc_max})")
+    else:
+        print(f"  Base freqs:            fixed {tuple(args.base_freqs)}")
+    if args.randomize_indel_rate:
+        print(f"  Indel rate:            randomized [{args.indel_rate_min}, {args.indel_rate_max}]")
+    else:
+        print(f"  Indel rate:            {args.indel_rate}")
     print(f"  Matrix size:           {args.max_len}×{args.max_len}")
     print(f"  Pairs per tree:        {pairs_per_tree}")
     print(f"  Total pairs:           {total_pairs}")
@@ -513,6 +538,20 @@ def generate_dataset(args):
         h5f.attrs['p_invariant'] = args.p_invariant
         h5f.attrs['indel_rate'] = args.indel_rate
         h5f.attrs['indel_size'] = args.indel_size
+        h5f.attrs['randomize_model'] = args.randomize_model
+        h5f.attrs['model_pool'] = ','.join(args.model_pool)
+        h5f.attrs['randomize_base_freqs'] = args.randomize_base_freqs
+        h5f.attrs['base_freq_conc_min'] = args.base_freq_conc_min
+        h5f.attrs['base_freq_conc_max'] = args.base_freq_conc_max
+        h5f.attrs['randomize_indel_rate'] = args.randomize_indel_rate
+        h5f.attrs['indel_rate_min'] = args.indel_rate_min
+        h5f.attrs['indel_rate_max'] = args.indel_rate_max
+
+        tree_models_dset = h5f.create_dataset('tree_model_id', shape=(args.num_trees,), dtype='int32')
+        tree_indel_rate_dset = h5f.create_dataset('tree_indel_rate', shape=(args.num_trees,), dtype='float32')
+        tree_base_freqs_dset = h5f.create_dataset('tree_base_freqs', shape=(args.num_trees, 4), dtype='float32')
+
+        model_to_id = {'jc69': 0, 'hky85': 1, 'gtr': 2}
 
         current_idx = 0
 
@@ -522,6 +561,7 @@ def generate_dataset(args):
         for tree_idx in range(args.num_trees):
             # Build tree
             seed = args.seed + tree_idx if args.seed is not None else None
+            np_rng = np.random.default_rng(seed)
             root = build_random_tree(
                 args.n_taxa,
                 min_branch=args.min_branch,
@@ -529,19 +569,34 @@ def generate_dataset(args):
                 seed=seed
             )
 
+            tree_model_name = random.choice(args.model_pool) if args.randomize_model else args.model_name
+            if args.randomize_base_freqs and tree_model_name != 'jc69':
+                concentration = random.uniform(args.base_freq_conc_min, args.base_freq_conc_max)
+                tree_base_freqs = tuple(np_rng.dirichlet(np.full(4, concentration, dtype=np.float64)).tolist())
+            elif tree_model_name == 'jc69':
+                tree_base_freqs = (0.25, 0.25, 0.25, 0.25)
+            else:
+                tree_base_freqs = tuple(args.base_freqs)
+
+            tree_indel_rate = random.uniform(args.indel_rate_min, args.indel_rate_max) if args.randomize_indel_rate else args.indel_rate
+
+            tree_models_dset[tree_idx] = model_to_id[tree_model_name]
+            tree_indel_rate_dset[tree_idx] = tree_indel_rate
+            tree_base_freqs_dset[tree_idx] = np.asarray(tree_base_freqs, dtype=np.float32)
+
             # Evolve sequences
             evolve_tree_pyvolve(
                 root,
                 args.seq_len,
                 alphabet='ACGT',
-                model_name=args.model_name,
+                model_name=tree_model_name,
                 kappa=args.kappa,
                 gtr_rates=tuple(args.gtr_rates),
-                base_freqs=tuple(args.base_freqs),
+                base_freqs=tree_base_freqs,
                 gamma_alpha=args.gamma_alpha,
                 gamma_categories=args.gamma_categories,
                 p_invariant=args.p_invariant,
-                indel_rate=args.indel_rate,
+                indel_rate=tree_indel_rate,
                 indel_size=args.indel_size,
                 max_len=args.max_len,
             )
@@ -629,7 +684,7 @@ if __name__ == '__main__':
                         help='Sequence type: N=nucleotide, P=protein')
 
     # Evolution model parameters
-    parser.add_argument('--model-name', type=str, default='gtr', choices=['gtr', 'hky85'],
+    parser.add_argument('--model-name', type=str, default='gtr', choices=['jc69', 'gtr', 'hky85'],
                         help='Nucleotide substitution model')
     parser.add_argument('--kappa', type=float, default=4.0,
                         help='Transition/transversion ratio for HKY85 mode')
@@ -651,6 +706,25 @@ if __name__ == '__main__':
                         help='Indel rate for nucleotide evolution')
     parser.add_argument('--indel-size', type=int, default=1,
                         help='Default indel event size')
+
+    # Domain-randomization controls
+    parser.add_argument('--randomize-model', action='store_true',
+                        help='Randomize substitution model per tree from --model-pool')
+    parser.add_argument('--model-pool', nargs='+', default=['jc69', 'hky85', 'gtr'],
+                        choices=['jc69', 'hky85', 'gtr'],
+                        help='Model candidates used when --randomize-model is enabled')
+    parser.add_argument('--randomize-base-freqs', action='store_true',
+                        help='Randomize base composition per tree using a Dirichlet distribution')
+    parser.add_argument('--base-freq-conc-min', type=float, default=2.0,
+                        help='Minimum Dirichlet concentration for base frequency randomization')
+    parser.add_argument('--base-freq-conc-max', type=float, default=30.0,
+                        help='Maximum Dirichlet concentration for base frequency randomization')
+    parser.add_argument('--randomize-indel-rate', action='store_true',
+                        help='Randomize indel rate per tree in [--indel-rate-min, --indel-rate-max]')
+    parser.add_argument('--indel-rate-min', type=float, default=0.0,
+                        help='Minimum indel rate used when --randomize-indel-rate is enabled')
+    parser.add_argument('--indel-rate-max', type=float, default=0.003,
+                        help='Maximum indel rate used when --randomize-indel-rate is enabled')
 
     # Output parameters
     parser.add_argument('--output-path', type=str, default='data/evolutionary_10k.h5',
@@ -681,6 +755,26 @@ if __name__ == '__main__':
 
     if args.indel_size < 1:
         print("Error: --indel-size must be >= 1")
+        sys.exit(1)
+
+    if not args.model_pool:
+        print("Error: --model-pool cannot be empty")
+        sys.exit(1)
+
+    if args.base_freq_conc_min <= 0 or args.base_freq_conc_max <= 0:
+        print("Error: --base-freq-conc-min and --base-freq-conc-max must be > 0")
+        sys.exit(1)
+
+    if args.base_freq_conc_min > args.base_freq_conc_max:
+        print("Error: --base-freq-conc-min must be <= --base-freq-conc-max")
+        sys.exit(1)
+
+    if args.indel_rate_min < 0 or args.indel_rate_max < 0:
+        print("Error: --indel-rate-min and --indel-rate-max must be >= 0")
+        sys.exit(1)
+
+    if args.indel_rate_min > args.indel_rate_max:
+        print("Error: --indel-rate-min must be <= --indel-rate-max")
         sys.exit(1)
 
     generate_dataset(args)
