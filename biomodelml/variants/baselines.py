@@ -6,7 +6,7 @@ from typing import Iterable, Tuple
 
 import numpy
 from Bio import AlignIO
-from Bio import pairwise2
+from Bio.Align import PairwiseAligner
 from scipy.linalg import expm
 from scipy.optimize import minimize_scalar
 
@@ -127,8 +127,56 @@ class PDistanceVariant(ControlVariant):
 
     @staticmethod
     def _pairwise_align(seq_a: str, seq_b: str):
-        aln = pairwise2.align.globalms(seq_a, seq_b, 2.0, -1.0, -5.0, -1.0, one_alignment_only=True)
-        return aln[0].seqA, aln[0].seqB
+        aligner = PairwiseAligner()
+        aligner.mode = "global"
+        aligner.match_score = 2.0
+        aligner.mismatch_score = -1.0
+        aligner.open_gap_score = -5.0
+        aligner.extend_gap_score = -1.0
+
+        alignment = aligner.align(seq_a, seq_b)[0]
+        a_blocks, b_blocks = alignment.aligned
+
+        i = 0
+        j = 0
+        out_a = []
+        out_b = []
+
+        for (a0, a1), (b0, b1) in zip(a_blocks, b_blocks):
+            while i < a0 and j < b0:
+                out_a.append(seq_a[i])
+                out_b.append(seq_b[j])
+                i += 1
+                j += 1
+            while i < a0:
+                out_a.append(seq_a[i])
+                out_b.append('-')
+                i += 1
+            while j < b0:
+                out_a.append('-')
+                out_b.append(seq_b[j])
+                j += 1
+
+            out_a.append(seq_a[a0:a1])
+            out_b.append(seq_b[b0:b1])
+            i = a1
+            j = b1
+
+        while i < len(seq_a) and j < len(seq_b):
+            out_a.append(seq_a[i])
+            out_b.append(seq_b[j])
+            i += 1
+            j += 1
+        while i < len(seq_a):
+            out_a.append(seq_a[i])
+            out_b.append('-')
+            i += 1
+        while j < len(seq_b):
+            out_a.append('-')
+            out_b.append(seq_b[j])
+            j += 1
+
+        return ''.join(out_a), ''.join(out_b)
 
 
 class JukesCantorVariant(PDistanceVariant):
