@@ -2,6 +2,7 @@ from __future__ import annotations
 import traceback
 import pandas
 import dataclasses
+import numpy
 from pathlib import Path
 from typing import Iterable
 from biomodelml.variants.variant import Variant
@@ -37,6 +38,8 @@ class Experiment:
         return self
     
     def run_and_save(self):
+        successful_trees = []
+        failed_variants = []
         for variant in self._variants:
             try:
                 distances = variant.build_matrix()
@@ -44,9 +47,112 @@ class Experiment:
                     name=variant.name, distances=distances,
                     tree=phylo.neighbor_joining(distances.matrix))
                 self._save_all(None, tree_struct)
+                successful_trees.append(tree_struct)
                 print(f"{variant.name} done!")
             except Exception:
+                failed_variants.append(getattr(variant, "name", "unknown"))
                 print(traceback.format_exc())        
+        self._save_benchmark_summary(successful_trees, failed_variants)
+
+    @staticmethod
+    def _vectorize_upper_triangle(matrix: numpy.ndarray) -> numpy.ndarray:
+        if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+            return numpy.array([], dtype=numpy.float64)
+        tri = numpy.triu_indices(matrix.shape[0], k=1)
+        return matrix[tri].astype(numpy.float64, copy=False)
+
+    @staticmethod
+    def _matrix_against_reference(matrix: numpy.ndarray, reference: numpy.ndarray):
+        vec = Experiment._vectorize_upper_triangle(matrix)
+        ref = Experiment._vectorize_upper_triangle(reference)
+        if vec.size == 0 or ref.size == 0 or vec.size != ref.size:
+            return {
+                "mae": numpy.nan,
+                "rmse": numpy.nan,
+                "pearson_r": numpy.nan,
+            }
+
+        delta = vec - ref
+        mae = float(numpy.mean(numpy.abs(delta)))
+        rmse = float(numpy.sqrt(numpy.mean(delta * delta)))
+
+        vec_std = float(numpy.std(vec))
+        ref_std = float(numpy.std(ref))
+        if vec_std > 0.0 and ref_std > 0.0:
+            pearson_r = float(numpy.corrcoef(vec, ref)[0, 1])
+        else:
+            pearson_r = numpy.nan
+
+        return {
+            "mae": mae,
+            "rmse": rmse,
+            "pearson_r": pearson_r,
+        }
+
+    def _save_benchmark_summary(self, successful_trees: list[TreeStruct], failed_variants: list[str]):
+        rows = []
+        siamese_ref = None
+        for tree_struct in successful_trees:
+            if "siamese" in tree_struct.name.lower():
+                siamese_ref = tree_struct.distances.matrix.astype(numpy.float64, copy=False)
+                break
+
+        for tree_struct in successful_trees:
+            matrix = tree_struct.distances.matrix.astype(numpy.float64, copy=False)
+            upper = self._vectorize_upper_triangle(matrix)
+            if upper.size > 0:
+                pair_mean = float(numpy.mean(upper))
+                pair_std = float(numpy.std(upper))
+                pair_min = float(numpy.min(upper))
+                pair_max = float(numpy.max(upper))
+            else:
+                pair_mean = numpy.nan
+                pair_std = numpy.nan
+                pair_min = numpy.nan
+                pair_max = numpy.nan
+
+            if siamese_ref is not None and tree_struct.name.lower().find("siamese") == -1:
+                vs_siamese = self._matrix_against_reference(matrix, siamese_ref)
+            else:
+                vs_siamese = {
+                    "mae": numpy.nan,
+                    "rmse": numpy.nan,
+                    "pearson_r": numpy.nan,
+                }
+
+            rows.append({
+                "variant": tree_struct.name,
+                "n_taxa": int(matrix.shape[0]) if matrix.ndim == 2 else 0,
+                "pair_mean": pair_mean,
+                "pair_std": pair_std,
+                "pair_min": pair_min,
+                "pair_max": pair_max,
+                "diag_mean": float(numpy.mean(numpy.diag(matrix))) if matrix.ndim == 2 else numpy.nan,
+                "symmetry_max_abs": float(numpy.max(numpy.abs(matrix - matrix.T))) if matrix.ndim == 2 else numpy.nan,
+                "vs_siamese_mae": vs_siamese["mae"],
+                "vs_siamese_rmse": vs_siamese["rmse"],
+                "vs_siamese_pearson_r": vs_siamese["pearson_r"],
+                "status": "ok",
+            })
+
+        for variant_name in failed_variants:
+            rows.append({
+                "variant": variant_name,
+                "n_taxa": 0,
+                "pair_mean": numpy.nan,
+                "pair_std": numpy.nan,
+                "pair_min": numpy.nan,
+                "pair_max": numpy.nan,
+                "diag_mean": numpy.nan,
+                "symmetry_max_abs": numpy.nan,
+                "vs_siamese_mae": numpy.nan,
+                "vs_siamese_rmse": numpy.nan,
+                "vs_siamese_pearson_r": numpy.nan,
+                "status": "failed",
+            })
+
+        if rows:
+            pandas.DataFrame(rows).to_csv(self._output_path / "benchmark_summary.csv", index=False)
 
     def _save_distance_matrix(self, tree_struct: TreeStruct):
         pandas.DataFrame(
