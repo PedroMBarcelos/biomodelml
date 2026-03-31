@@ -18,6 +18,12 @@ from biomodelml.variants.unrestricted_ssim import UnrestrictedSSIMVariant
 from biomodelml.variants.deep_search.variant import DeepSearchVariant
 from biomodelml.variants.optical_flow import OpticalFlowVariant
 from biomodelml.variants.siamese import SiameseVariant
+from biomodelml.variants.baselines import (
+    PDistanceVariant,
+    JukesCantorVariant,
+    GTRMLEVariant,
+    MuscleIdentityVariant,
+)
 
 
 def build_trees(fasta_file: str, output_path: str, sequence_type: str, 
@@ -49,6 +55,10 @@ def build_trees(fasta_file: str, output_path: str, sequence_type: str,
 
     all_variants = {
         'control': lambda: ControlVariant(fasta_file, sequence_type),
+        'pdist': lambda: PDistanceVariant(fasta_file, sequence_type),
+        'jc69': lambda: JukesCantorVariant(fasta_file, sequence_type),
+        'gtr_mle': lambda: GTRMLEVariant(fasta_file, sequence_type),
+        'muscle': lambda: MuscleIdentityVariant(fasta_file, sequence_type),
         'sw': lambda: SmithWatermanVariant(fasta_file, sequence_type),
         'nw': lambda: NeedlemanWunschVariant(fasta_file, sequence_type),
         'rssim': lambda: ResizedSSIMVariant(fasta_file, sequence_type, image_path),
@@ -80,13 +90,22 @@ def build_trees(fasta_file: str, output_path: str, sequence_type: str,
 
 
 def main():
-    """Build phylogenetic dendrograms using image-based similarity algorithms."""
+    """Build phylogenetic dendrograms using baseline and image-based algorithms."""
+    algorithm_choices = [
+        'control', 'pdist', 'jc69', 'gtr_mle', 'muscle',
+        'sw', 'nw', 'rssim', 'rmsssim', 'wmsssim',
+        'gssim', 'ussim', 'uqi', 'deep', 'optflow', 'siamese'
+    ]
     parser = argparse.ArgumentParser(
         description="Build phylogenetic trees using multiple similarity algorithms",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Available algorithms:
-  control   - Clustal Omega (requires external installation)
+  control   - Clustal Omega identity distance
+  pdist     - p-distance over Clustal Omega MSA
+  jc69      - Jukes-Cantor (JC69) over Clustal Omega MSA
+  gtr_mle   - Pairwise GTR maximum-likelihood distance over Clustal Omega MSA
+  muscle    - MUSCLE MSA + p-distance
   sw        - Smith-Waterman
   nw        - Needleman-Wunsch
   rssim     - Resized SSIM
@@ -102,130 +121,45 @@ Available algorithms:
 Examples:
   # Run all algorithms
   %(prog)s sequences.fasta.N.sanitized output/ N
-  
-  # Run specific algorithms
-  %(prog)s sequences.fasta.N.sanitized output/ N --algorithms rmsssim ussim
-  
-  # Run Siamese network with a custom model
-  %(prog)s sequences.fasta.N.sanitized output/ N --algorithms siamese --model-path /path/to/your/model.pth
 
-  # Use pre-generated images
-  %(prog)s sequences.fasta.N.sanitized output/ N --image-path data/images/
+  # Run scientific baselines only
+  %(prog)s sequences.fasta.N.sanitized output/ N --algorithms pdist jc69 gtr_mle muscle
         """
     )
-    
-    parser.add_argument(
-        "fasta_file",
-        help="Path to the sanitized FASTA file"
-    )
-    
-    parser.add_argument(
-        "output_path",
-        help="Directory to save phylogenetic tree results"
-    )
-    
-    parser.add_argument(
-        "seq_type",
-        choices=["N", "P"],
-        help="Sequence type: N for nucleotides, P for proteins"
-    )
-    
-    parser.add_argument(
-        "--image-path",
-        help="Path to pre-generated matrix images (optional)"
-    )
-    
-    parser.add_argument(
-        "--algorithms",
-        nargs="+",
-        choices=['control', 'sw', 'nw', 'rssim', 'rmsssim', 'wmsssim', 
-                 'gssim', 'ussim', 'uqi', 'deep', 'optflow', 'siamese'],
-        help="Specific algorithms to run (default: all)"
-    )
 
+    parser.add_argument("fasta_file", help="Path to the sanitized FASTA file")
+    parser.add_argument("output_path", help="Directory to save phylogenetic tree results")
+    parser.add_argument("seq_type", choices=["N", "P"], help="Sequence type: N for nucleotides, P for proteins")
+    parser.add_argument("--image-path", help="Path to pre-generated matrix images (optional)")
+    parser.add_argument("--algorithms", nargs="+", choices=algorithm_choices, help="Specific algorithms to run (default: all)")
     parser.add_argument(
         "--model-path",
         default="models/siamese_regressor.pth",
         help="Path to the trained Siamese model weights (for 'siamese' algorithm)"
     )
-
     parser.add_argument(
         "--optflow-mode",
         choices=["legacy", "strict"],
         default="legacy",
         help="Optical flow behavior preset: legacy (historical) or strict (aggressive denoising)"
     )
-
-    parser.add_argument(
-        "--optflow-threshold",
-        """
-    )
-    
-    parser.add_argument(
-        "fasta_file",
-        help="Path to the sanitized FASTA file"
-    )
-    
-    parser.add_argument(
-        "output_path",
-        help="Directory to save phylogenetic tree results"
-    )
-    
-    parser.add_argument(
-        "seq_type",
-        choices=["N", "P"],
-        help="Sequence type: N for nucleotides, P for proteins"
-    )
-    
-    parser.add_argument(
-        "--image-path",
-        help="Path to pre-generated matrix images (optional)"
-    )
-    
-    parser.add_argument(
-        "--algorithms",
-        nargs="+",
-        choices=['control', 'sw', 'nw', 'rssim', 'rmsssim', 'wmsssim', 
-                 'gssim', 'ussim', 'uqi', 'deep', 'optflow'],
-        help="Specific algorithms to run (default: all)"
-    )
-
-    parser.add_argument(
-        "--optflow-mode",
-        choices=["legacy", "strict"],
-        default="legacy",
-        help="Optical flow behavior preset: legacy (historical) or strict (aggressive denoising)"
-    )
-
     parser.add_argument(
         "--optflow-threshold",
         type=float,
         default=None,
         help="Override optical flow magnitude threshold (e.g., 0.5 or 1.0)"
     )
-
     parser.add_argument(
         "--optflow-diagonal-width",
         type=int,
         default=None,
         help="Override diagonal ribbon width in pixels"
     )
+    parser.add_argument("--optflow-highpass", action="store_true", help="Force-enable high-pass preprocessing in optical flow")
+    parser.add_argument("--optflow-no-highpass", action="store_true", help="Force-disable high-pass preprocessing in optical flow")
 
-    parser.add_argument(
-        "--optflow-highpass",
-        action="store_true",
-        help="Force-enable high-pass preprocessing in optical flow"
-    )
-
-    parser.add_argument(
-        "--optflow-no-highpass",
-        action="store_true",
-        help="Force-disable high-pass preprocessing in optical flow"
-    )
-    
     args = parser.parse_args()
-    
-    # Validate image path if provided
+
     if args.image_path and not os.path.exists(args.image_path):
         print(f"Warning: Image path {args.image_path} does not exist", file=sys.stderr)
 
@@ -239,17 +173,24 @@ Examples:
         optflow_highpass = False
     else:
         optflow_highpass = None
-    
-    # Create output subdirectory
+
     base_name = args.fasta_file.split(".")[0].split("/")[-1]
     output_dir = os.path.join(args.output_path, base_name)
     os.makedirs(output_dir, exist_ok=True)
-    
+
     try:
-        build_trees(args.fasta_file, output_dir, args.seq_type, 
-                   args.image_path, args.algorithms,
-                   args.optflow_mode, args.optflow_threshold,
-                   args.optflow_diagonal_width, optflow_highpass)
+        build_trees(
+            args.fasta_file,
+            output_dir,
+            args.seq_type,
+            args.image_path,
+            args.algorithms,
+            args.optflow_mode,
+            args.optflow_threshold,
+            args.optflow_diagonal_width,
+            optflow_highpass,
+            args.model_path,
+        )
     except Exception as e:
         print(f"Error building trees: {e}", file=sys.stderr)
         import traceback

@@ -19,6 +19,12 @@ from biomodelml.variants.windowed_ssim_multiscale import WindowedSSIMMultiScaleV
 from biomodelml.variants.greedy_ssim import GreedySSIMVariant
 from biomodelml.variants.unrestricted_ssim import UnrestrictedSSIMVariant
 from biomodelml.variants.uqi import UQIVariant
+from biomodelml.variants.baselines import (
+    PDistanceVariant,
+    JukesCantorVariant,
+    GTRMLEVariant,
+    MuscleIdentityVariant,
+)
 from biomodelml.variants.deep_search.variant import DeepSearchVariant
 from biomodelml.variants.optical_flow import OpticalFlowVariant
 
@@ -35,6 +41,10 @@ __all__ = [
     "GreedySSIMVariant",
     "UnrestrictedSSIMVariant",
     "UQIVariant",
+    "PDistanceVariant",
+    "JukesCantorVariant",
+    "GTRMLEVariant",
+    "MuscleIdentityVariant",
     "DeepSearchVariant",
     "OpticalFlowVariant",
 ]
