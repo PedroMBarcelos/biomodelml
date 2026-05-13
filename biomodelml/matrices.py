@@ -273,3 +273,65 @@ def extract_channel(image_array: numpy.ndarray, channel: str) -> numpy.ndarray:
             f"Valid options: 'red', 'green', 'blue', 'red_blue', 'red_green', "
             f"'green_blue', 'gray_r', 'gray_g', 'gray_b', 'gray_max', 'gray_mean', 'full'"
         )
+
+
+def save_matrix_as_numpy(
+    matrix: numpy.ndarray,
+    output_path: str,
+    compress: bool = False
+) -> None:
+    """
+    Save an RGB matrix as a NumPy .npy file.
+    
+    This is the lightweight format for training datasets, avoiding PNG encoding overhead
+    while maintaining lossless uint8 RGB data.
+    
+    Args:
+        matrix: RGB numpy array with shape (H, W, 3) and dtype uint8
+        output_path: Path where to save the .npy file (e.g., "/path/to/image.npy")
+        compress: If True, save as compressed .npz file (smaller on disk, slower to load).
+                 If False, save as uncompressed .npy (faster to load, larger on disk).
+    
+    Returns:
+        None
+        
+    Raises:
+        ValueError: If matrix is not uint8 or doesn't have shape (H, W, 3)
+        OSError: If directory doesn't exist or permission denied
+        
+    Examples:
+        >>> matrix = build_matrix(seq1, seq2, 255, "N")
+        >>> save_matrix_as_numpy(matrix, "output/image_001.npy")
+        >>> # Load later with: loaded = numpy.load("output/image_001.npy")
+    """
+    # Validate input
+    if not isinstance(matrix, numpy.ndarray):
+        raise ValueError(f"Expected numpy.ndarray, got {type(matrix)}")
+    
+    if matrix.dtype != numpy.uint8:
+        raise ValueError(
+            f"Expected uint8 matrix, got {matrix.dtype}. "
+            f"Matrix values should be in range [0, 255]."
+        )
+    
+    if len(matrix.shape) != 3 or matrix.shape[2] != 3:
+        raise ValueError(
+            f"Expected shape (H, W, 3), got {matrix.shape}. "
+            f"Matrix should be RGB with 3 channels."
+        )
+    
+    # Ensure output directory exists
+    output_dir = os.path.dirname(output_path)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+    
+    # Save file
+    if compress:
+        # Use compressed format (.npz)
+        base_path = output_path.replace('.npy', '').replace('.npz', '')
+        numpy.savez_compressed(base_path + '.npz', matrix=matrix)
+    else:
+        # Use uncompressed format (.npy)
+        if not output_path.endswith('.npy'):
+            output_path = output_path + '.npy'
+        numpy.save(output_path, matrix)

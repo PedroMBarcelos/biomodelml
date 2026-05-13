@@ -44,3 +44,34 @@ class TreeStruct:
 class SeqTypeStruct:
     N: List[str]
     P: List[str]
+
+
+@dataclass
+class ImageMetadata:
+    """Metadata for a single generated image."""
+    image_id: str
+    image_path: str
+    source_fasta: str
+    sequence_name: str
+    sequence_length: int
+    matrix_shape: tuple  # (height, width, channels)
+    tree_distances_path: Optional[str] = None
+    tree_distances_available: bool = False
+    additional_info: Optional[dict] = None
+
+
+@dataclass
+class SequenceGenerationJob:
+    """Metadata for a sequence generation run via AliSim."""
+    job_id: str
+    preset: str
+    sequence_id: str
+    fasta_path: str
+    tree_path: str
+    distances_path: str
+    num_sequences: int
+    alignment_length: int
+    sequence_type: str
+    random_seed: Optional[int] = None
+    parameters: Optional[dict] = None
+    timestamp: Optional[str] = None

@@ -43,6 +43,20 @@ pip install biomodelml[full]
 pip install biomodelml[gpu]
 ```
 
+### Optional: Data Generation Dependencies
+
+To use the supervised training data generation pipeline (generating synthetic sequences with AliSim):
+
+```bash
+# On Ubuntu/Debian
+sudo apt-get install iqtree
+
+# On macOS (via Homebrew)
+brew install iqtree
+
+# Or download from https://www.iqtree.org/
+```
+
 ##  Usage
 
 ### 1. The Core Pipeline: Sequence to Matrix
@@ -57,7 +71,163 @@ biomodelml-sanitize mysequences.fasta N
 biomodelml-matchmatrix mysequences.fasta.N.sanitized output_tensors/ N
 ```
 
-### 2. Downstream Task: Phylogenetic Analysis
+### 2. Supervised Training Data Generation
+
+Generate synthetic evolutionary datasets for training deep learning models with known ground-truth phylogenetic distances using **AliSim** (integrated into IQ-TREE).
+
+#### Prerequisites
+First, install IQ-TREE with AliSim support:
+
+```bash
+# On Ubuntu/Debian
+sudo apt-get install iqtree
+
+# On macOS (via Homebrew)
+brew install iqtree
+
+# Or download from https://www.iqtree.org/
+```
+
+#### Step 1: Generate Synthetic Sequences
+
+Use the `biomodelml-generate-sequences` CLI to create FASTA files with known evolutionary distances:
+
+```bash
+# Generate sequences using the "training" preset
+biomodelml-generate-sequences output_dir/ \
+  --preset training \
+  --num-replicates 10 \
+  --num-sequences 20 \
+  --sequence-type N
+
+# Or customize with overrides
+biomodelml-generate-sequences output_dir/ \
+  --preset benchmark \
+  --alignment-length 2000 \
+  --evolution-rate mixed \
+  --tree-style random \
+  --seed 42
+```
+
+**Available Presets:**
+- **training**: 500bp, moderate evolution, GTR model, balanced tree (recommended for most use cases)
+- **benchmark**: 1000bp, mixed evolution, HKY model, random tree (for diverse training data)
+- **noise**: 300bp, high evolution, GTR+Gamma model, power-law tree (robust model training)
+
+**Output Structure:**
+```
+output_dir/
+├── sequences/
+│   ├── replicate_001/
+│   │   └── alignment.fasta
+│   ├── replicate_002/
+│   │   └── alignment.fasta
+│   └── ...
+├── trees/
+│   ├── replicate_001/
+│   │   └── tree.nwk
+│   └── ...
+└── metadata/
+    ├── replicate_001/
+    │   └── distances.csv
+    └── ...
+```
+
+#### Step 2: Generate Image Matrices
+
+Convert FASTA sequences to RGB matrices:
+
+```bash
+biomodelml-generate-images output_dir/sequences/ images_output/ N \
+  --max-window 255 \
+  --num-workers 4 \
+  --include-metadata
+
+# For protein sequences
+biomodelml-generate-images output_dir/sequences/ images_output/ P
+```
+
+**Output Structure:**
+```
+images_output/
+├── images/
+│   ├── replicate_001_seq_0001.npy
+│   ├── replicate_001_seq_0002.npy
+│   └── ...
+└── metadata/
+    ├── image_manifest.json
+    └── distances.json
+```
+
+#### Step 3: Create PyTorch Datasets
+
+Use the Python API to load images with ground-truth distances for training:
+
+```python
+from biomodelml.data_generation import TrainingDataset
+
+# Load the dataset
+dataset = TrainingDataset("images_output/", lazy_load=True)
+
+# Split into train/val/test with stratification by replicate
+train_ds, val_ds, test_ds = dataset.split(
+    train_ratio=0.7,
+    val_ratio=0.15,
+    test_ratio=0.15,
+    by_replicate=True  # Ensures no data leakage across replicates
+)
+
+print(f"Train: {len(train_ds)}, Val: {len(val_ds)}, Test: {len(test_ds)}")
+
+# Access individual samples
+for item in train_ds:
+    print(f"Image shape: {item.image_array.shape}")  # (H, W, 3) uint8
+    print(f"Ground-truth distances: {item.distances.shape}")  # (num_sequences,)
+```
+
+#### Complete Workflow Example
+
+```bash
+#!/bin/bash
+
+# Generate 10 replicates with 20 sequences each
+biomodelml-generate-sequences synth_data/ \
+  --preset training \
+  --num-replicates 10 \
+  --num-sequences 20 \
+  --sequence-type N \
+  --seed 12345
+
+# Generate images
+biomodelml-generate-images synth_data/sequences/ synth_images/ N \
+  --max-window 255 \
+  --num-workers 8
+
+# Now use in Python for model training
+```
+
+```python
+from biomodelml.data_generation import TrainingDataset
+import torch
+from torch.utils.data import DataLoader
+
+# Load dataset
+dataset = TrainingDataset("synth_images/", lazy_load=True)
+train_ds, val_ds, test_ds = dataset.split()
+
+# Create DataLoaders for your model
+train_loader = DataLoader(train_ds, batch_size=32, shuffle=True)
+val_loader = DataLoader(val_ds, batch_size=32)
+test_loader = DataLoader(test_ds, batch_size=32)
+
+# Train your model here...
+for batch in train_loader:
+    images = batch.image_array  # Shape: (batch_size, H, W, 3)
+    distances = batch.distances  # Shape: (batch_size, num_sequences)
+    # ... training code ...
+```
+
+### 3. Downstream Task: Phylogenetic Analysis
 
 BioModelML ships with built-in models specifically designed for sequence comparison and phylogenetic reconstruction using our image matrices.
 
@@ -140,9 +310,39 @@ biomodelml-tree mysequences.fasta.N.sanitized results/ N \
 
 ##  Documentation & Support
 
-- **CLI Help**: Run any command with the `--help` flag (e.g., `biomodelml-tree --help`).
-- **Examples**: Check the `notebooks/` directory for Jupyter tutorials on integrating BioModelML matrices with custom PyTorch training loops.
-- **Issues**: [GitHub Issues](https://github.com/yourusername/biomodelml/issues)
+### CLI Commands
+
+- **Core Sequence Processing:**
+  - `biomodelml-sanitize` - Clean and validate FASTA sequences
+  - `biomodelml-matchmatrix` - Generate RGB matrices from sequences
+  - `biomodelml-tree` - Reconstruct phylogenetic trees using various algorithms
+
+- **Data Generation Pipeline:**
+  - `biomodelml-generate-sequences` - Create synthetic evolutionary datasets with AliSim (requires IQ-TREE)
+  - `biomodelml-generate-images` - Convert FASTA sequences to RGB image matrices
+
+**Tip:** Run any command with `--help` to see all available options:
+```bash
+biomodelml-generate-sequences --help
+biomodelml-generate-images --help
+```
+
+### Learning Resources
+
+- **Jupyter Notebooks**: Check the `notebooks/` directory for tutorials on:
+  - Loading and processing image matrices
+  - Integrating BioModelML output with PyTorch DataLoaders
+  - Training custom deep learning models with phylogenetic ground truth
+  
+- **Example Workflows**: The supervised data generation pipeline above demonstrates a complete end-to-end workflow from synthetic sequence generation to model training.
+
+- **API Documentation**: Explore the main `biomodelml.data_generation` module for programmatic access to all pipeline components.
+
+### Troubleshooting
+
+- **IQ-TREE not found**: Make sure IQ-TREE is installed and in your system PATH. Run `iqtree -version` to verify.
+- **CUDA/GPU issues**: For GPU acceleration, ensure NVIDIA CUDA toolkit and cuDNN are properly installed.
+- **Memory issues with large datasets**: Use the `--num-workers` flag to adjust parallel processing during image generation.
 
 ## 🤝 Contributing
 

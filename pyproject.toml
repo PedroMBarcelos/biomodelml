@@ -55,15 +55,6 @@ gpu = [
     "ppscore>=1.2.0",
 ]
 
-# Siamese network support
-siamese = [
-    "torch==2.2.2",
-    "torchvision==0.17.2",
-    "pyvolve==1.0.3",
-    "h5py>=3.0.0",
-    "tqdm>=4.62.3",
-]
-
 # Hyperparameter optimization
 optimization = [
     "optuna>=2.10.0,<3.1",
@@ -86,7 +77,7 @@ docs = [
 
 # All extras
 all = [
-    "biomodelml[full,siamese,optimization,dev,docs]",
+    "biomodelml[full,optimization,dev,docs]",
 ]
 
 [project.urls]
@@ -100,9 +91,11 @@ biomodelml-matchmatrix = "biomodelml.cli.matchmatrix:main"
 biomodelml-tree = "biomodelml.cli.tree_builder:main"
 biomodelml-optimize = "biomodelml.cli.optimize:main"
 biomodelml-clusterize = "biomodelml.cli.clusterize:main"
+biomodelml-generate-sequences = "biomodelml.cli.generate_sequences:main"
+biomodelml-generate-images = "biomodelml.cli.generate_images:main"
 
 [tool.setuptools]
-packages = ["biomodelml", "biomodelml.variants", "biomodelml.variants.deep_search", "biomodelml.cli"]
+packages = ["biomodelml", "biomodelml.variants", "biomodelml.variants.deep_search", "biomodelml.cli", "biomodelml.data_generation"]
 
 [tool.setuptools.package-data]
 biomodelml = ["py.typed"]
