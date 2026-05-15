@@ -23,7 +23,7 @@ dist/
 .coverage
 htmlcov/
 .tox/
-
+tests/
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb_checkpoints

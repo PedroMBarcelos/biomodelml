@@ -92,6 +92,7 @@ biomodelml-tree = "biomodelml.cli.tree_builder:main"
 biomodelml-optimize = "biomodelml.cli.optimize:main"
 biomodelml-clusterize = "biomodelml.cli.clusterize:main"
 biomodelml-generate-sequences = "biomodelml.cli.generate_sequences:main"
+biomodelml-generate-large-scale = "biomodelml.cli.generate_large_scale:main"
 biomodelml-generate-images = "biomodelml.cli.generate_images:main"
 
 [tool.setuptools]

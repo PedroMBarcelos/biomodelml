@@ -42,47 +42,40 @@ class AliSimGenerator:
     
     def _check_iqtree_available(self) -> None:
         """
-        Check if an IQ-TREE binary is available. Try the provided executable,
-        then fall back to common names (`iqtree3`, `iqtree2`, `iqtree`) found in PATH.
+        Check if an IQ-TREE binary is available with AliSim support.
+        Prioritizes iqtree2 (v3.1.1) and iqtree3 which have --alisim support
+        over iqtree 1.6.12 which does not.
 
         Raises:
-            FileNotFoundError: If no working IQ-TREE binary can be found
+            FileNotFoundError: If no working IQ-TREE binary with AliSim can be found
         """
         tried = []
 
-        # Helper to test a candidate executable
-        def _test_exec(candidate: str) -> bool:
+        # Helper to test if a candidate supports --alisim
+        def _test_has_alisim(candidate: str) -> bool:
             try:
                 result = subprocess.run(
-                    [candidate, "-version"],
+                    [candidate, "--help"],
                     capture_output=True,
                     timeout=5,
                     text=True,
                 )
-                return result.returncode == 0
+                return "--alisim" in result.stdout or "--alisim" in result.stderr
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 return False
 
-        # If a full path or name was provided, try it first
-        if _test_exec(self.iqtree_path):
-            return
-
-        tried.append(self.iqtree_path)
-
-        # Search PATH for common IQ-TREE binary names
-        candidates = ["iqtree3", "iqtree2", "iqtree"]
+        # First try ordered list: iqtree2, iqtree3, then iqtree (fallback)
+        # Always try this order regardless of what was passed as iqtree_executable
+        candidates = ["iqtree2", "iqtree3", "iqtree"]
+        
         for name in candidates:
-            if name == self.iqtree_path:
-                continue
-
             found = shutil.which(name)
-            if found and _test_exec(found):
-                # Use the discovered full path
+            if found and _test_has_alisim(found):
                 self.iqtree_path = found
                 return
-
+            
             # If which didn't return a path, still try the bare name
-            if _test_exec(name):
+            if _test_has_alisim(name):
                 self.iqtree_path = name
                 return
 
