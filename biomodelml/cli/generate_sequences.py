@@ -111,6 +111,12 @@ Examples:
         default="iqtree2",
         help="Path to iqtree2 executable (default: assume in PATH)"
     )
+
+    parser.add_argument(
+        "--alisim-args",
+        default=None,
+        help="Raw additional arguments to pass directly to AliSim (quoted string)"
+    )
     
     args = parser.parse_args()
     
@@ -195,7 +201,8 @@ Examples:
                 config=config,
                 job_id=f"alignment_001",
                 sequence_type=args.sequence_type,
-                random_seed=seed,
+                    random_seed=seed,
+                    alisim_args=args.alisim_args,
             )
             
             # Move tree to trees directory

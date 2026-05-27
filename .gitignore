@@ -28,6 +28,7 @@ tests/
 .ipynb_checkpoints/
 *.ipynb_checkpoints
 
+
 # IDE
 .vscode/
 .idea/
@@ -50,6 +51,8 @@ output_myoglobin_images/
 final_demo/
 final_test/
 test_algorithm_selection/
+output/
+output_dir/
 
 # Large data files
 *.zip

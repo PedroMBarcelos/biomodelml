@@ -7,6 +7,7 @@ with known evolutionary distances using IQ-TREE's AliSim simulator.
 
 import json
 import os
+import shlex
 import subprocess
 import tempfile
 from datetime import datetime
@@ -95,6 +96,7 @@ class AliSimGenerator:
         job_id: str,
         sequence_type: str = "N",
         random_seed: Optional[int] = None,
+        alisim_args: Optional[str] = None,
     ) -> SequenceGenerationJob:
         """
         Generate synthetic aligned sequences using AliSim.
@@ -130,6 +132,7 @@ class AliSimGenerator:
                 config=config,
                 sequence_type=sequence_type,
                 random_seed=random_seed,
+                alisim_args=alisim_args,
             )
             
             # Copy outputs to final location
@@ -169,6 +172,7 @@ class AliSimGenerator:
         config: AliSimConfig,
         sequence_type: str,
         random_seed: Optional[int] = None,
+        alisim_args: Optional[str] = None,
     ) -> Tuple[Path, Path]:
         """
         Execute alisim command to generate sequences.
@@ -214,6 +218,16 @@ class AliSimGenerator:
         # Ensure a seed is provided (IQ-TREE may require it for non-zero exit)
         seed = random_seed if random_seed is not None else int(np.random.randint(1, 2**31 - 1))
         cmd.extend(["-seed", str(seed)])
+
+        # Append any raw AliSim args provided by the user. The value should be
+        # a quoted string of flags which we split safely with shlex.
+        if alisim_args:
+            try:
+                extra = shlex.split(alisim_args)
+                cmd.extend(extra)
+            except ValueError:
+                # If shlex parsing fails, append as a single token (best-effort)
+                cmd.append(alisim_args)
 
         try:
             result = subprocess.run(
