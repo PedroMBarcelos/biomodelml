@@ -94,6 +94,7 @@ biomodelml-clusterize = "biomodelml.cli.clusterize:main"
 biomodelml-generate-sequences = "biomodelml.cli.generate_sequences:main"
 biomodelml-generate-large-scale = "biomodelml.cli.generate_large_scale:main"
 biomodelml-generate-images = "biomodelml.cli.generate_images:main"
+biomodelml-visualize-image = "biomodelml.cli.visualize_image:main"
 
 [tool.setuptools]
 packages = ["biomodelml", "biomodelml.variants", "biomodelml.variants.deep_search", "biomodelml.cli", "biomodelml.data_generation"]

@@ -4,8 +4,11 @@
 import argparse
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 from datetime import datetime
+import numpy as np
+from typing import Optional
 
 from biomodelml.data_generation.presets import (
     get_preset,
@@ -16,6 +19,27 @@ from biomodelml.data_generation.presets import (
     EVOLUTION_RATES,
 )
 from biomodelml.data_generation.alisim_generator import AliSimGenerator
+
+
+def _sample_alignment_length(
+    base_length: int,
+    min_length: Optional[int],
+    max_length: Optional[int],
+    rng: np.random.Generator,
+) -> int:
+    """Sample a sequence length, optionally from an inclusive range."""
+    if min_length is None and max_length is None:
+        return base_length
+
+    lower = min_length if min_length is not None else base_length
+    upper = max_length if max_length is not None else base_length
+
+    if lower > upper:
+        raise ValueError(
+            f"Invalid alignment length range: min_length ({lower}) must be <= max_length ({upper})"
+        )
+
+    return int(rng.integers(lower, upper + 1))
 
 
 def main():
@@ -70,6 +94,20 @@ Examples:
         type=int,
         default=None,
         help="Sequence length in bp/aa (default: from preset)"
+    )
+
+    parser.add_argument(
+        "--min-alignment-length",
+        type=int,
+        default=None,
+        help="Minimum length to sample per replicate, inclusive"
+    )
+
+    parser.add_argument(
+        "--max-alignment-length",
+        type=int,
+        default=None,
+        help="Maximum length to sample per replicate, inclusive"
     )
     
     parser.add_argument(
@@ -139,6 +177,16 @@ Examples:
         tree_style=args.tree_style,
         num_sequences=args.num_sequences,
     )
+
+    if args.min_alignment_length is not None or args.max_alignment_length is not None:
+        lower = args.min_alignment_length if args.min_alignment_length is not None else config.alignment_length
+        upper = args.max_alignment_length if args.max_alignment_length is not None else config.alignment_length
+        if lower > upper:
+            print(
+                f"Error: invalid length range [{lower}, {upper}]",
+                file=sys.stderr,
+            )
+            sys.exit(1)
     
     # Validate model choice
     if args.sequence_type == "N":
@@ -167,6 +215,10 @@ Examples:
     print(f"Generating {args.num_replicates} replicates with {args.preset} preset...")
     print(f"  Model: {config.model}")
     print(f"  Alignment length: {config.alignment_length}")
+    if args.min_alignment_length is not None or args.max_alignment_length is not None:
+        lower = args.min_alignment_length if args.min_alignment_length is not None else config.alignment_length
+        upper = args.max_alignment_length if args.max_alignment_length is not None else config.alignment_length
+        print(f"  Alignment length range: {lower}-{upper}")
     print(f"  Tree style: {config.tree_style}")
     print(f"  Evolution rate: {config.evolution_rate}")
     
@@ -190,7 +242,15 @@ Examples:
         rep_trees_dir.mkdir(parents=True, exist_ok=True)
         
         # Generate sequences for this replicate
-        seed = args.seed + rep_idx if args.seed is not None else None
+        rep_seed = args.seed + rep_idx if args.seed is not None else int(np.random.randint(1, 2**31 - 1))
+        rep_rng = np.random.default_rng(rep_seed)
+        rep_alignment_length = _sample_alignment_length(
+            base_length=config.alignment_length,
+            min_length=args.min_alignment_length,
+            max_length=args.max_alignment_length,
+            rng=rep_rng,
+        )
+        rep_config = replace(config, alignment_length=rep_alignment_length)
         job_id = f"{args.preset}_{rep_num}_001"
         
         try:
@@ -198,11 +258,11 @@ Examples:
             # We modify it to save to the replicate-specific directory
             job = generator.generate(
                 output_dir=rep_sequences_dir,
-                config=config,
+                config=rep_config,
                 job_id=f"alignment_001",
                 sequence_type=args.sequence_type,
-                    random_seed=seed,
-                    alisim_args=args.alisim_args,
+                random_seed=rep_seed,
+                alisim_args=args.alisim_args,
             )
             
             # Move tree to trees directory
@@ -240,6 +300,10 @@ Examples:
         "num_replicates": args.num_replicates,
         "num_replicates_generated": len(jobs),
         "configuration": config.to_dict(),
+                "alignment_length_range": {
+                    "min": args.min_alignment_length,
+                    "max": args.max_alignment_length,
+                },
         "sequence_type": args.sequence_type,
         "random_seed": args.seed,
         "jobs": [

@@ -6,6 +6,62 @@ import sys
 from pathlib import Path
 
 from biomodelml.data_generation.image_generator import ImageGenerator
+from biomodelml.sanitize import convert_and_remove_unrelated_sequences
+
+
+def _fasta_record_count(fasta_file: Path) -> int:
+    """Count FASTA records by header lines."""
+    count = 0
+    with fasta_file.open("r") as handle:
+        for line in handle:
+            if line.startswith(">"):
+                count += 1
+    return count
+
+
+def _find_sanitized_files(input_path: Path, seq_type: str):
+    """Sanitize FASTA inputs and return sanitized files to process."""
+    if input_path.is_file():
+        if input_path.name.endswith(".sanitized"):
+            return [input_path]
+
+        convert_and_remove_unrelated_sequences(str(input_path), seq_type)
+        sanitized_file = Path(f"{input_path}.{seq_type}.sanitized")
+        if _fasta_record_count(sanitized_file) == 0:
+            raise ValueError(
+                f"No valid sequences after sanitization for {input_path}. "
+                f"Check sequence type '{seq_type}' and FASTA content."
+            )
+        return [sanitized_file]
+
+    fasta_files = sorted(list(input_path.glob("**/*.fasta")) + list(input_path.glob("**/*.fa")))
+
+    sanitized_files = []
+    if fasta_files:
+        print(f"Sanitizing {len(fasta_files)} FASTA files...")
+        for fasta_file in fasta_files:
+            convert_and_remove_unrelated_sequences(str(fasta_file), seq_type)
+            sanitized_file = Path(f"{fasta_file}.{seq_type}.sanitized")
+            if _fasta_record_count(sanitized_file) > 0:
+                sanitized_files.append(sanitized_file)
+
+        if not sanitized_files:
+            raise ValueError(
+                "No valid sequences after sanitization for any FASTA file. "
+                f"Check sequence type '{seq_type}' and input content."
+            )
+        return sanitized_files
+
+    sanitized_files = sorted(input_path.glob(f"**/*.{seq_type}.sanitized"))
+    if sanitized_files:
+        sanitized_files = [f for f in sanitized_files if _fasta_record_count(f) > 0]
+        if not sanitized_files:
+            raise ValueError(
+                f"No valid sequences found in existing '.{seq_type}.sanitized' files."
+            )
+        return sanitized_files
+
+    raise FileNotFoundError(f"No FASTA files found in {input_path}")
 
 
 def main():
@@ -81,6 +137,13 @@ Examples:
     else:
         input_dir = input_path
         print(f"Processing FASTA directory: {input_dir}")
+
+    # Ensure all inputs are sanitized before matrix generation
+    try:
+        sanitized_files = _find_sanitized_files(input_path, args.seq_type)
+    except Exception as e:
+        print(f"Error sanitizing input sequences: {e}", file=sys.stderr)
+        sys.exit(1)
     
     # Initialize generator
     try:
@@ -98,8 +161,8 @@ Examples:
     print(f"Generating images with max_window={args.max_window}...")
     
     try:
-        generator.generate_from_directory(
-            fasta_dir=str(input_dir),
+        generator.generate_from_files(
+            fasta_files=sanitized_files,
             sequence_type=args.seq_type,
             link_tree_distances=args.include_metadata,
         )

@@ -68,12 +68,35 @@ class ImageGenerator:
         
         # Find all FASTA files
         fasta_files = list(fasta_dir.glob("**/*.fasta")) + list(fasta_dir.glob("**/*.fa"))
-        
+
         if not fasta_files:
             raise FileNotFoundError(f"No FASTA files found in {fasta_dir}")
-        
+
+        self.generate_from_files(
+            fasta_files=fasta_files,
+            sequence_type=sequence_type,
+            link_tree_distances=link_tree_distances,
+        )
+
+    def generate_from_files(
+        self,
+        fasta_files: List[Path],
+        sequence_type: str,
+        link_tree_distances: bool = True,
+    ) -> None:
+        """
+        Generate images from an explicit FASTA file list.
+
+        Args:
+            fasta_files: List of FASTA file paths to process
+            sequence_type: 'N' for nucleotide, 'P' for protein
+            link_tree_distances: Try to link generated tree distances (default: True)
+        """
+        if not fasta_files:
+            raise FileNotFoundError("No FASTA files to process")
+
         print(f"Found {len(fasta_files)} FASTA files. Generating images...")
-        
+
         # Generate images with parallel processing
         with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
             futures = []
