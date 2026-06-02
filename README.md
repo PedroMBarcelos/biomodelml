@@ -135,7 +135,7 @@ output_dir/
 
 #### Step 2: Generate Image Matrices
 
-Convert FASTA sequences to RGB matrices:
+Convert FASTA sequences to HDF5-backed RGB matrix shards:
 
 ```bash
 biomodelml-generate-images output_dir/sequences/ images_output/ N \
@@ -151,13 +151,14 @@ biomodelml-generate-images output_dir/sequences/ images_output/ P
 ```
 images_output/
 ├── images/
-│   ├── replicate_001_seq_0001.npy
-│   ├── replicate_001_seq_0002.npy
+│   ├── replicate_001.h5
+│   ├── replicate_002.h5
 │   └── ...
 └── metadata/
-    ├── image_manifest.json
-    └── distances.json
+    └── image_manifest.json
 ```
+
+Each HDF5 shard stores one dataset per generated matrix, plus checksums and sample metadata for validation.
 
 #### Step 3: Create PyTorch Datasets
 
@@ -198,10 +199,13 @@ biomodelml-generate-sequences synth_data/ \
   --sequence-type N \
   --seed 12345
 
-# Generate images
+# Generate HDF5-backed image shards
 biomodelml-generate-images synth_data/sequences/ synth_images/ N \
   --max-window 255 \
   --num-workers 8
+
+# Validate the generated HDF5 shards and checksums
+biomodelml-validate-images synth_images/
 
 # Now use in Python for model training
 ```
@@ -319,7 +323,8 @@ biomodelml-tree mysequences.fasta.N.sanitized results/ N \
 
 - **Data Generation Pipeline:**
   - `biomodelml-generate-sequences` - Create synthetic evolutionary datasets with AliSim (requires IQ-TREE)
-  - `biomodelml-generate-images` - Convert FASTA sequences to RGB image matrices
+  - `biomodelml-generate-images` - Convert FASTA sequences to HDF5-backed RGB image shards
+  - `biomodelml-validate-images` - Audit generated HDF5 shards, manifests, and checksums
 
 **Tip:** Run any command with `--help` to see all available options:
 ```bash

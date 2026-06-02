@@ -6,15 +6,14 @@ with metadata tracking for training dataset lineage.
 """
 
 import json
-import os
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Optional, Any
+from typing import List
 from concurrent.futures import ThreadPoolExecutor
-import numpy as np
 from Bio import SeqIO
 
-from biomodelml.matrices import build_matrix, save_matrix_as_numpy
+from biomodelml.matrices import build_matrix
+from biomodelml.data_generation.hdf5_store import HDF5ImageWriter
 from biomodelml.structs import ImageMetadata
 
 
@@ -117,6 +116,9 @@ class ImageGenerator:
                     print(f"✓ Processed {i+1}/{len(futures)} files")
                 except Exception as e:
                     print(f"✗ Error processing file {i+1}: {e}")
+
+        if not self.generated_images:
+            raise RuntimeError("No images were generated; check the input files and sequence type")
         
         # Write manifest
         self._write_manifest()
@@ -139,47 +141,53 @@ class ImageGenerator:
             List of ImageMetadata for generated images
         """
         images = []
-        
+
+        shard_path = self.images_dir / f"{fasta_file.stem}.h5"
+
         # Read sequences
         records = list(SeqIO.parse(fasta_file, "fasta"))
-        
-        # Generate self-comparison images
-        for record in records:
-            # Generate image ID from FASTA name and sequence name
-            image_id = f"{fasta_file.stem}_{record.id}"
-            
-            # Generate matrix (self-comparison)
-            try:
-                matrix = build_matrix(record.seq, record.seq, self.max_window, sequence_type)
-            except Exception as e:
-                print(f"Warning: Could not generate matrix for {image_id}: {e}")
-                continue
-            
-            # Save image
-            image_path = self.images_dir / f"{image_id}.npy"
-            save_matrix_as_numpy(matrix, str(image_path))
-            
-            # Try to find tree distances file
-            distances_path = None
-            if link_tree_distances:
-                possible_distances = fasta_file.parent.parent / "trees" / fasta_file.parent.name / f"{fasta_file.stem}.distances.csv"
-                if possible_distances.exists():
-                    distances_path = str(possible_distances)
-            
-            # Create metadata
-            metadata = ImageMetadata(
-                image_id=image_id,
-                image_path=str(image_path),
-                source_fasta=str(fasta_file),
-                sequence_name=record.id,
-                sequence_length=len(record.seq),
-                matrix_shape=tuple(matrix.shape),
-                tree_distances_path=distances_path,
-                tree_distances_available=distances_path is not None,
-            )
-            
-            images.append(metadata)
-        
+
+        with HDF5ImageWriter(
+            file_path=shard_path,
+            source_fasta=str(fasta_file),
+            sequence_type=sequence_type,
+            max_window=self.max_window,
+            num_workers=self.num_workers,
+            include_metadata=self.include_metadata,
+        ) as writer:
+            # Generate self-comparison images
+            for record in records:
+                # Generate image ID from FASTA name and sequence name
+                image_id = f"{fasta_file.stem}_{record.id}"
+
+                # Generate matrix (self-comparison)
+                try:
+                    matrix = build_matrix(record.seq, record.seq, self.max_window, sequence_type)
+                except Exception as e:
+                    print(f"Warning: Could not generate matrix for {image_id}: {e}")
+                    continue
+
+                # Try to find tree distances file
+                distances_path = None
+                if link_tree_distances:
+                    possible_distances = fasta_file.parent.parent / "trees" / fasta_file.parent.name / f"{fasta_file.stem}.distances.csv"
+                    if possible_distances.exists():
+                        distances_path = str(possible_distances)
+
+                metadata = writer.write_matrix(
+                    image_id=image_id,
+                    matrix=matrix,
+                    source_fasta=str(fasta_file),
+                    sequence_name=record.id,
+                    sequence_length=len(record.seq),
+                    tree_distances_path=distances_path,
+                )
+
+                images.append(metadata)
+
+        if not images:
+            raise ValueError(f"No valid sequences could be converted for {fasta_file}")
+
         return images
     
     def _write_manifest(self) -> None:
@@ -190,20 +198,9 @@ class ImageGenerator:
                 "max_window": self.max_window,
                 "num_workers": self.num_workers,
                 "num_images": len(self.generated_images),
+                "storage_format": "hdf5",
             },
-            "images": [
-                {
-                    "image_id": img.image_id,
-                    "image_path": img.image_path,
-                    "source_fasta": img.source_fasta,
-                    "sequence_name": img.sequence_name,
-                    "sequence_length": img.sequence_length,
-                    "matrix_shape": img.matrix_shape,
-                    "tree_distances_path": img.tree_distances_path,
-                    "tree_distances_available": img.tree_distances_available,
-                }
-                for img in self.generated_images
-            ],
+            "images": [img.__dict__ for img in self.generated_images],
         }
         
         manifest_file = self.metadata_dir / "image_manifest.json"

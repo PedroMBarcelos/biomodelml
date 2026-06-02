@@ -4,15 +4,34 @@
 import argparse
 import sys
 from pathlib import Path
+from typing import Optional
 
 import matplotlib.pyplot as plt
+import h5py
 import numpy as np
 
 
-def _load_matrix(image_path: Path) -> np.ndarray:
-    """Load a matrix stored as .npy or .npz."""
+def _load_matrix(image_path: Path, dataset_path: Optional[str] = None) -> np.ndarray:
+    """Load a matrix stored as .h5/.hdf5, or legacy .npy/.npz files."""
     if not image_path.exists():
         raise FileNotFoundError(f"Image file not found: {image_path}")
+
+    if image_path.suffix.lower() in {".h5", ".hdf5"}:
+        with h5py.File(image_path, "r") as handle:
+            target_dataset = dataset_path
+            if target_dataset is None:
+                dataset_names = list(handle.keys())
+                if len(dataset_names) != 1:
+                    raise ValueError(
+                        f"HDF5 file {image_path} contains multiple datasets; "
+                        "use --dataset to select one"
+                    )
+                target_dataset = dataset_names[0]
+
+            if target_dataset not in handle:
+                raise ValueError(f"Dataset '{target_dataset}' not found in {image_path}")
+
+            return handle[target_dataset][...]
 
     loaded = np.load(image_path, allow_pickle=False)
     if isinstance(loaded, np.lib.npyio.NpzFile):
@@ -40,17 +59,17 @@ def _select_view(matrix: np.ndarray, view: str) -> np.ndarray:
 def main() -> None:
     """Visualize a matrix saved by BioModelML."""
     parser = argparse.ArgumentParser(
-        description="Visualize a BioModelML .npy matrix image",
+                description="Visualize a BioModelML matrix image from HDF5 or legacy NumPy storage",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  biomodelml-visualize-image output/images/alignment_001.npy
-  biomodelml-visualize-image output/images/alignment_001.npy --view red
-  biomodelml-visualize-image output/images/alignment_001.npy --save alignment_001.png
+    biomodelml-visualize-image output/images/alignment_001.h5
+    biomodelml-visualize-image output/images/alignment_001.h5 --dataset alignment_001_seq1 --view red
+    biomodelml-visualize-image output/images/alignment_001.h5 --save alignment_001.png
         """,
     )
 
-    parser.add_argument("image_file", help="Path to a .npy or .npz matrix file")
+        parser.add_argument("image_file", help="Path to a .h5/.hdf5, .npy, or .npz matrix file")
     parser.add_argument(
         "--view",
         choices=["rgb", "red", "green", "blue", "gray"],
@@ -62,6 +81,10 @@ Examples:
         help="Optional path to save the visualization as a PNG file",
     )
     parser.add_argument(
+        "--dataset",
+        help="HDF5 dataset name when visualizing a .h5/.hdf5 file with multiple datasets",
+    )
+    parser.add_argument(
         "--title",
         help="Optional plot title",
     )
@@ -71,7 +94,7 @@ Examples:
     image_path = Path(args.image_file)
 
     try:
-        matrix = _load_matrix(image_path)
+        matrix = _load_matrix(image_path, args.dataset)
         view_data = _select_view(matrix, args.view)
     except Exception as e:
         print(f"Error loading image matrix: {e}", file=sys.stderr)

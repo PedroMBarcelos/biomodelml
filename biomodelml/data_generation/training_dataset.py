@@ -8,6 +8,7 @@ and paired ground-truth tree distances.
 import json
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Any
+import h5py
 import numpy as np
 import pandas as pd
 
@@ -40,9 +41,10 @@ class ImageTreePair:
         self.sequence_length = sequence_length
     
     def __repr__(self) -> str:
+        image_shape = None if self.image_array is None else self.image_array.shape
         return (
             f"ImageTreePair(id={self.image_id}, "
-            f"image_shape={self.image_array.shape}, "
+            f"image_shape={image_shape}, "
             f"has_distances={self.distances is not None})"
         )
 
@@ -85,7 +87,9 @@ class TrainingDataset:
         """Build list of samples from manifest."""
         for img_data in self.manifest.get("images", []):
             image_id = img_data["image_id"]
-            image_path = self.root_dir / img_data["image_path"]
+            raw_image_path = Path(img_data["image_path"])
+            image_path = raw_image_path if raw_image_path.is_absolute() else self.root_dir / raw_image_path
+            dataset_path = img_data.get("dataset_path")
             
             # Load distances if available
             distances = None
@@ -105,9 +109,10 @@ class TrainingDataset:
                 )
                 # Store path for lazy loading
                 sample._image_path = str(image_path)
+                sample._image_dataset_path = dataset_path
             else:
                 # Eager load: load image immediately
-                image_array = self._load_image(image_path)
+                image_array = self._load_image(image_path, dataset_path)
                 sample = ImageTreePair(
                     image_id=image_id,
                     image_array=image_array,
@@ -119,10 +124,29 @@ class TrainingDataset:
             self.samples.append(sample)
     
     @staticmethod
-    def _load_image(image_path: Path) -> np.ndarray:
-        """Load image from .npy file."""
+    def _load_image(image_path: Path, dataset_path: Optional[str] = None) -> np.ndarray:
+        """Load image from HDF5 shards or legacy .npy files."""
         if not image_path.exists():
             raise FileNotFoundError(f"Image file not found: {image_path}")
+
+        if image_path.suffix.lower() in {".h5", ".hdf5"}:
+            with h5py.File(image_path, "r") as handle:
+                target_dataset = dataset_path
+                if target_dataset is None:
+                    dataset_names = list(handle.keys())
+                    if len(dataset_names) != 1:
+                        raise ValueError(
+                            f"HDF5 file {image_path} contains multiple datasets; "
+                            "dataset_path is required"
+                        )
+                    target_dataset = dataset_names[0]
+
+                if target_dataset not in handle:
+                    raise FileNotFoundError(
+                        f"Dataset '{target_dataset}' not found in HDF5 file {image_path}"
+                    )
+                return handle[target_dataset][...]
+
         return np.load(image_path)
     
     def _load_distances_for_image(
@@ -167,7 +191,10 @@ class TrainingDataset:
         
         # Lazy load image if needed
         if self.lazy_load and sample.image_array is None:
-            sample.image_array = self._load_image(Path(sample._image_path))
+            sample.image_array = self._load_image(
+                Path(sample._image_path),
+                getattr(sample, "_image_dataset_path", None),
+            )
         
         return sample
     

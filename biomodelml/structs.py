@@ -57,6 +57,9 @@ class ImageMetadata:
     matrix_shape: tuple  # (height, width, channels)
     tree_distances_path: Optional[str] = None
     tree_distances_available: bool = False
+    dataset_path: Optional[str] = None
+    matrix_checksum: Optional[str] = None
+    storage_format: str = "npy"
     additional_info: Optional[dict] = None
 
 
