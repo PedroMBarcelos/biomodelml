@@ -176,7 +176,8 @@ class TrainingDataset:
     def __len__(self) -> int:
         """Get number of samples."""
         return len(self.samples)
-    
+
+    '''
     def __getitem__(self, index: int) -> ImageTreePair:
         """
         Get sample by index.
@@ -201,7 +202,41 @@ class TrainingDataset:
             )
         
         return sample
+    '''
     
+    def __getitem__(self, index: int) -> ImageTreePair:
+        """
+        Get sample by index.
+        
+        Args:
+            index: Sample index
+            
+        Returns:
+            ImageTreePair with image and optional distances
+        """
+        sample = self.samples[index]
+        
+        # Lazy load image if needed
+        if self.lazy_load and sample.image_array is None:
+            # 1. Pegamos as partes do caminho original gravado no sample
+            parts = Path(sample._image_path).parts
+            
+            # 2. Lógica anti-duplicação genérica:
+            # Se a primeira e a segunda parte forem idênticas (ex: ('images_output2', 'images_output2', ...))
+            # nós simplesmente removemos a primeira para limpar o caminho.
+            if len(parts) > 1 and parts[0] == parts[1]:
+                corrected_path = Path(*parts[1:])
+            else:
+                corrected_path = Path(sample._image_path)
+
+            # 3. Passamos o caminho corrigido de forma segura
+            sample.image_array = self._load_image(
+                corrected_path,
+                getattr(sample, "_image_dataset_path", None),
+            )
+        
+        return sample
+
     def split(
         self,
         train_ratio: float = 0.7,

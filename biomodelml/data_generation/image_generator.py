@@ -188,9 +188,33 @@ class ImageGenerator:
                 # Try to find tree distances file
                 distances_path = None
                 if link_tree_distances:
-                    possible_distances = fasta_file.parent.parent / "trees" / fasta_file.parent.name / f"{fasta_file.stem}.distances.csv"
+                    # 1. Pegamos o stem limpo do alinhamento original (ex: 'alignment_001')
+                    # Removendo quaisquer sufixos de sanitização ou tipo (.P, .N, .sanitized)
+                    clean_stem = fasta_file.name.split('.')[0]
+                    
+                    # 2. Localizamos a pasta de árvores correspondente à réplica atual
+                    # test_dir/sequences/replicate_001 -> test_dir/trees/replicate_001
+                    replicate_folder = fasta_file.parent.name
+                    sequences_root = fasta_file.parent.parent
+                    project_root = sequences_root.parent
+                    
+                    # Montamos o caminho esperado para o CSV de distâncias
+                    possible_distances = project_root / "trees" / replicate_folder / f"{clean_stem}.distances.csv"
+
+                    # Se não achar, tentamos um fallback flexível olhando a pasta da réplica
+                    if not possible_distances.exists():
+                        trees_dir = project_root / "trees" / replicate_folder
+                        if trees_dir.exists():
+                            # Procura qualquer CSV que comece com o nome do alinhamento
+                            matched_csvs = list(trees_dir.glob(f"{clean_stem}*.csv"))
+                            if matched_csvs:
+                                possible_distances = matched_csvs[0]
+
                     if possible_distances.exists():
                         distances_path = str(possible_distances)
+                    else:
+                        print(f"Warning: Tree distances not found for {image_id} at {possible_distances}")
+                # --- FIM DA CORREÇÃO ---
 
                 metadata = writer.write_matrix(
                     image_id=image_id,
