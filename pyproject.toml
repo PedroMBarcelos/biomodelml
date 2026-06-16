@@ -97,6 +97,7 @@ biomodelml-generate-large-scale = "biomodelml.cli.generate_large_scale:main"
 biomodelml-generate-images = "biomodelml.cli.generate_images:main"
 biomodelml-visualize-image = "biomodelml.cli.visualize_image:main"
 biomodelml-validate-images = "biomodelml.cli.validate_images:main"
+biomodelml-train-siamese = "biomodelml.cli.train_siamese:main"
 
 [tool.setuptools]
 packages = ["biomodelml", "biomodelml.variants", "biomodelml.variants.deep_search", "biomodelml.cli", "biomodelml.data_generation"]

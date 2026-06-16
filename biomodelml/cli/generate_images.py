@@ -165,7 +165,9 @@ Examples:
             fasta_files=sanitized_files,
             sequence_type=args.seq_type,
             link_tree_distances=args.include_metadata,
+            input_dir=input_dir,  # <-- Add this line right here
         )
+        
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)

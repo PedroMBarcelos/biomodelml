@@ -12,7 +12,7 @@ HYDROPHILIC = "STYNQDE"
 HYDROPHOBIC = "GAVCPLIMWFKRH"
 ALL_PROTEINS = ProteinSequence.alphabet.get_symbols()
 PROTEINS = HYDROPHILIC+HYDROPHOBIC
-
+'''
 def _weight_ptns(seq1: Seq, seq2: Seq, rows: numpy.ndarray, max_window: int):
 
     rgb_dict = {}
@@ -57,7 +57,73 @@ def _weight_seqs(seq1: Seq, seq2: Seq, rows: numpy.ndarray, max_window: int):
             idx = indexes[letter]
             rows[line, idx] = max_window
     return rows
+'''
 
+def _weight_ptns(seq1: Seq, seq2: Seq, rows: numpy.ndarray, max_window: int):
+    total_aa_combines = itertools.combinations_with_replacement(ALL_PROTEINS, 2)
+    substmatrix = SubstitutionMatrix.dict_from_str(PROTSUB)
+    min_subst = min(substmatrix.values())
+    max_subst = max(substmatrix.values()) + abs(min_subst)
+    sneath = SubstitutionMatrix.dict_from_str(SNEATH)
+    min_sneath = min(sneath.values())
+    max_sneath = max(sneath.values()) - min_sneath
+    
+    # 1. Mapear cada aminoácido para um índice inteiro único estático
+    # ALL_PROTEINS deve ser uma string ou lista de caracteres únicos
+    aa_to_idx = {aa: i for i, aa in enumerate(ALL_PROTEINS)}
+    num_aas = len(ALL_PROTEINS)
+    
+    # 2. Criar uma Look-Up Table (LUT) 2D em NumPy para as cores RGB
+    # Tamanho: (num_aas, num_aas, 3)
+    lut = numpy.zeros((num_aas, num_aas, 3), dtype=numpy.uint8)
+    
+    for aa1, aa2 in total_aa_combines:
+        color_by_subst = min(max_window, max(0, round((substmatrix[aa1, aa2]+abs(min_subst))*max_window/max_subst)))
+        color_by_sneath = min(max_window, max(0, round((sneath.get((aa1, aa2), min_sneath)-min_sneath)*max_window/(max_sneath))))
+        combinations = max_window if aa1 == aa2 else 0
+
+        i1, i2 = aa_to_idx[aa1], aa_to_idx[aa2]
+        if (aa1 in PROTEINS) and (aa2 in PROTEINS):
+            rgb = (color_by_subst, combinations, color_by_sneath)
+        else:
+            rgb = (color_by_subst, 0, 0)
+            
+        lut[i1, i2] = rgb
+        lut[i2, i1] = rgb  # Simetria
+
+    # 3. Converter as sequências de entrada para vetores de índices inteiros
+    # Se houver algum caractere inesperado (ex: gaps), usamos um fallback seguro (0)
+    idx_seq1 = numpy.array([aa_to_idx.get(letter, 0) for letter in str(seq1)])
+    idx_seq2 = numpy.array([aa_to_idx.get(letter, 0) for letter in str(seq2)])
+
+    # 4. Magia da vetorização: Indexação avançada do NumPy (substitui os loops aninhados)
+    # Isso reconstrói a matriz RGB instantaneamente em nível C
+    rows[:, :, :] = lut[idx_seq2[:, numpy.newaxis], idx_seq1]
+
+    return rows
+
+
+def _weight_seqs(seq1: Seq, seq2: Seq, rows: numpy.ndarray, max_window: int):
+    # Converter sequências para arrays do NumPy de caracteres
+    arr1 = numpy.array(list(str(seq1)))
+    arr2 = numpy.array(list(str(seq2)))
+    
+    # Criar uma máscara booleana de posições válidas de nucleotídeos
+    # Evita processar caracteres inválidos ou estranhos
+    valid_nucleotides = numpy.array(list(NUCLEOTIDES))
+    mask_seq2 = numpy.isin(arr2, valid_nucleotides)
+    
+    # Comparação via broadcasting: gera uma matriz de identidade (True onde bate)
+    # arr2[:, None] vira uma coluna que se compara com a linha arr1
+    match_matrix = (arr2[:, numpy.newaxis] == arr1)
+    
+    # Aplicar a restrição de nucleotídeos da sequência 2
+    match_matrix = match_matrix & mask_seq2[:, numpy.newaxis]
+    
+    # Onde for True, preenchemos com o valor do max_window
+    rows[match_matrix] = max_window
+    
+    return rows
 
 def build_matrix(seq1: Seq, seq2: Seq, max_window: int, seq_type: str):
     """

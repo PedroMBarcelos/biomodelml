@@ -20,6 +20,7 @@ from biomodelml.variants.unrestricted_ssim import UnrestrictedSSIMVariant
 from biomodelml.variants.uqi import UQIVariant
 from biomodelml.variants.deep_search.variant import DeepSearchVariant
 from biomodelml.variants.optical_flow import OpticalFlowVariant
+from biomodelml.variants.siamese_sliding_window import SiameseSlidingWindowVariant
 
 __all__ = [
     "Variant",
@@ -36,4 +37,5 @@ __all__ = [
     "UQIVariant",
     "DeepSearchVariant",
     "OpticalFlowVariant",
+    "SiameseSlidingWindowVariant",
 ]

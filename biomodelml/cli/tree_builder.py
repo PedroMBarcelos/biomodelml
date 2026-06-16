@@ -17,6 +17,7 @@ from biomodelml.variants.greedy_ssim import GreedySSIMVariant
 from biomodelml.variants.unrestricted_ssim import UnrestrictedSSIMVariant
 from biomodelml.variants.deep_search.variant import DeepSearchVariant
 from biomodelml.variants.optical_flow import OpticalFlowVariant
+from biomodelml.variants.siamese_sliding_window import SiameseSlidingWindowVariant
 
 
 def build_trees(fasta_file: str, output_path: str, sequence_type: str, 
@@ -24,7 +25,11 @@ def build_trees(fasta_file: str, output_path: str, sequence_type: str,
                 optflow_mode: str = "legacy",
                 optflow_threshold: float = None,
                 optflow_diagonal_width: int = None,
-                optflow_highpass: bool = None):
+                optflow_highpass: bool = None,
+                siamese_window_size: int = 128,
+                siamese_stride: int = None,
+                siamese_top_k: int = 4,
+                siamese_head_path: str = None):
     """
     Build phylogenetic trees using specified algorithms.
     
@@ -55,7 +60,16 @@ def build_trees(fasta_file: str, output_path: str, sequence_type: str,
         'ussim': lambda: UnrestrictedSSIMVariant(fasta_file, sequence_type, image_path),
         'uqi': lambda: UQIVariant(fasta_file, sequence_type, image_path),
         'deep': lambda: DeepSearchVariant(fasta_file, sequence_type, image_path),
-        'optflow': lambda: OpticalFlowVariant(fasta_file, sequence_type, image_path, **optflow_kwargs)
+        'optflow': lambda: OpticalFlowVariant(fasta_file, sequence_type, image_path, **optflow_kwargs),
+        'siamese': lambda: SiameseSlidingWindowVariant(
+            fasta_file,
+            sequence_type,
+            image_path,
+            window_size=siamese_window_size,
+            stride=siamese_stride,
+            top_k=siamese_top_k,
+            head_path=siamese_head_path,
+        )
     }
     
     # Select algorithms to run
@@ -93,6 +107,7 @@ Available algorithms:
   uqi       - Universal Quality Index
   deep      - Deep Search (VGG16 + Annoy)
   optflow   - Dense Optical Flow with Farneback
+    siamese   - Siamese Sliding Window Network
 
 Examples:
   # Run all algorithms
@@ -131,7 +146,7 @@ Examples:
         "--algorithms",
         nargs="+",
         choices=['control', 'sw', 'nw', 'rssim', 'rmsssim', 'wmsssim', 
-                 'gssim', 'ussim', 'uqi', 'deep', 'optflow'],
+                 'gssim', 'ussim', 'uqi', 'deep', 'optflow', 'siamese'],
         help="Specific algorithms to run (default: all)"
     )
 
@@ -167,6 +182,34 @@ Examples:
         action="store_true",
         help="Force-disable high-pass preprocessing in optical flow"
     )
+
+    parser.add_argument(
+        "--siamese-window-size",
+        type=int,
+        default=128,
+        help="Sliding window size used by the Siamese variant"
+    )
+
+    parser.add_argument(
+        "--siamese-stride",
+        type=int,
+        default=None,
+        help="Sliding window stride used by the Siamese variant"
+    )
+
+    parser.add_argument(
+        "--siamese-top-k",
+        type=int,
+        default=4,
+        help="Top-k aggregation factor used by the Siamese variant"
+    )
+
+    parser.add_argument(
+        "--siamese-head-path",
+        type=str,
+        default=None,
+        help="Optional trained Siamese head model (.keras)"
+    )
     
     args = parser.parse_args()
     
@@ -194,7 +237,9 @@ Examples:
         build_trees(args.fasta_file, output_dir, args.seq_type, 
                    args.image_path, args.algorithms,
                    args.optflow_mode, args.optflow_threshold,
-                   args.optflow_diagonal_width, optflow_highpass)
+                   args.optflow_diagonal_width, optflow_highpass,
+                   args.siamese_window_size, args.siamese_stride,
+                   args.siamese_top_k, args.siamese_head_path)
     except Exception as e:
         print(f"Error building trees: {e}", file=sys.stderr)
         import traceback

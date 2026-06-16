@@ -272,6 +272,31 @@ experiment_optflow = Experiment(
 experiment_optflow.run_and_save()
 ```
 
+#### Siamese Sliding-Window Network
+
+The Siamese variant is designed for inputs with different image sizes. It extracts sliding windows from each matrix, compares every window against every other window, and then turns the resulting window-distance map into a phylogeny-ready scalar distance.
+
+Train the Siamese head on manifest-backed image pairs:
+
+```bash
+biomodelml-train-siamese images_output/ N models/siamese/ \
+  --window-size 128 \
+  --stride 64 \
+  --top-k 4
+```
+
+Reuse the trained head when building trees:
+
+```bash
+biomodelml-tree sequences.fasta.N.sanitized results/ N \
+  --algorithms siamese \
+  --image-path images_output/images/ \
+  --siamese-head-path models/siamese/siamese_head.keras \
+  --siamese-window-size 128 \
+  --siamese-stride 64 \
+  --siamese-top-k 4
+```
+
 ##  Available Task Models (Phylogeny)
 
 BioModelML currently includes several baseline and advanced algorithms for comparing sequence-images to infer evolutionary distance:
@@ -291,6 +316,8 @@ BioModelML currently includes several baseline and advanced algorithms for compa
     - **PNG-only Enforcement**: Optical flow requires PNG matrix inputs to avoid JPEG compression artifacts
   
   Particularly effective for detecting evolutionary changes in sequence patterns without traditional alignment. Optimized for sequences >100 residues with significant divergence.
+
+- **Siamese Sliding Window Network**: A trainable Siamese comparison head that scores every window pair across two matrices and aggregates the resulting map into a tree-building distance. Best for variable-size inputs where a single resized comparison would discard local structure.
 
 **CLI Strict Optical Flow Example:**
 
@@ -320,6 +347,7 @@ biomodelml-tree mysequences.fasta.N.sanitized results/ N \
   - `biomodelml-sanitize` - Clean and validate FASTA sequences
   - `biomodelml-matchmatrix` - Generate RGB matrices from sequences
   - `biomodelml-tree` - Reconstruct phylogenetic trees using various algorithms
+  - `biomodelml-train-siamese` - Train the Siamese sliding-window distance head
 
 - **Data Generation Pipeline:**
   - `biomodelml-generate-sequences` - Create synthetic evolutionary datasets with AliSim (requires IQ-TREE)
@@ -340,6 +368,7 @@ biomodelml-generate-images --help
   - Training custom deep learning models with phylogenetic ground truth
   
 - **Example Workflows**: The supervised data generation pipeline above demonstrates a complete end-to-end workflow from synthetic sequence generation to model training.
+- **Siamese Workflow**: Train a head with `biomodelml-train-siamese`, then pass the saved `.keras` file to `biomodelml-tree` with `--algorithms siamese` and the matching `--siamese-*` options.
 
 - **API Documentation**: Explore the main `biomodelml.data_generation` module for programmatic access to all pipeline components.
 

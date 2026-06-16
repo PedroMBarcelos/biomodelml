@@ -191,8 +191,12 @@ class TrainingDataset:
         
         # Lazy load image if needed
         if self.lazy_load and sample.image_array is None:
+            raw_path = str(sample._image_path)
+            if "images_output/images_output" in raw_path:
+                raw_path = raw_path.replace("images_output/images_output", "images_output")
+            corrected_path = Path(raw_path)
             sample.image_array = self._load_image(
-                Path(sample._image_path),
+                corrected_path,
                 getattr(sample, "_image_dataset_path", None),
             )
         
