@@ -310,7 +310,77 @@ Examples:
         if val_pairs
         else None
     )
+    def train_gen():
+        for i in range(len(train_sequence)):
+            yield train_sequence[i]
 
+    # Criamos o dataset garantindo assinaturas flexíveis (None) para as matrizes
+    train_dataset = tf.data.Dataset.from_generator(
+        train_gen,
+        output_signature=(
+            tf.TensorSpec(shape=(None, None, None, 1), dtype=tf.float32), # [Batch, Altura, Largura, Canal]
+            tf.TensorSpec(shape=(None, 1), dtype=tf.float32)              # [Batch, Label]
+        )
+    )
+    # Prefetch ativa o multi-threading de CPU em segundo plano
+    train_dataset = train_dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
+
+    # 2. Gerador para o Dataset de Validação (se existir)
+    if val_sequence is not None:
+        def val_gen():
+            for i in range(len(val_sequence)):
+                yield val_sequence[i]
+        
+        val_dataset = tf.data.Dataset.from_generator(
+            val_gen,
+            output_signature=(
+                tf.TensorSpec(shape=(None, None, None, 1), dtype=tf.float32),
+                tf.TensorSpec(shape=(None, 1), dtype=tf.float32)
+            )
+        ).prefetch(buffer_size=tf.data.AUTOTUNE)
+    else:
+        val_dataset = None
+
+    # ====================================================================
+    # CONFIGURAÇÃO DO FIT E SALVAMENTO
+    # ====================================================================
+    os.makedirs(args.output_dir, exist_ok=True)
+    head_path = Path(args.output_dir) / "siamese_head.keras"
+    config_path = Path(args.output_dir) / "siamese_head.json"
+
+    fit_kwargs = {"epochs": args.epochs, "verbose": 1}
+
+    # Passamos o dataset do tf.data em vez da Sequence crua
+    if val_dataset is not None:
+        fit_kwargs["validation_data"] = val_dataset
+
+    model.fit(train_dataset, **fit_kwargs)
+    model.save(head_path)
+    # ====================================================================
+
+    config = {
+        "distance_scale": float(label_scale),
+        "window_size": args.window_size,
+        "stride": args.stride,
+        "top_k": args.top_k,
+        "feature_input_shape": list(args.feature_input_shape),
+        "conv_filters": list(variant._head_conv_filters),
+        "dense_units": list(variant._head_dense_units),
+        "dropout": variant._head_dropout,
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "learning_rate": args.learning_rate,
+        "train_pairs": len(train_pairs),
+        "val_pairs": len(val_pairs),
+        "test_pairs": len(test_pairs),
+        "sequence_type": args.sequence_type,
+    }
+    with open(config_path, "w") as handle:
+        json.dump(config, handle, indent=2)
+
+    print(f"Saved trained head to {head_path}")
+    print(f"Saved training config to {config_path}")
+'''
     os.makedirs(args.output_dir, exist_ok=True)
     head_path = Path(args.output_dir) / "siamese_head.keras"
     config_path = Path(args.output_dir) / "siamese_head.json"
@@ -345,7 +415,7 @@ Examples:
 
     print(f"Saved trained head to {head_path}")
     print(f"Saved training config to {config_path}")
-
+'''
 
 if __name__ == "__main__":
     main()
