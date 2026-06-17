@@ -316,14 +316,9 @@ Examples:
     config_path = Path(args.output_dir) / "siamese_head.json"
 
     fit_kwargs = {"epochs": args.epochs, "verbose": 1}
+
     if val_sequence is not None:
         fit_kwargs["validation_data"] = val_sequence
-
-    fit_kwargs.update({
-    "workers": 8,                # Usa 4 núcleos de CPU apenas para fatiar matrizes em paralelo
-    "use_multiprocessing": True, # Ativa multiprocessamento para contornar o GIL do Python
-    "max_queue_size": 10         # Deixa até 10 batches pré-fatiados prontos na fila da GPU
-    })
 
     model.fit(train_sequence, **fit_kwargs)
     model.save(head_path)
