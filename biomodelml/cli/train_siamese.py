@@ -41,7 +41,9 @@ class SiamesePairSequence(tf.keras.utils.Sequence):
         batch_size: int,
         label_scale: float,
         shuffle: bool = True,
+        **kwargs
     ):
+        super().__init__(**kwargs)
         self.dataset = dataset
         self.pairs = list(pairs)
         self.variant = variant
@@ -49,6 +51,7 @@ class SiamesePairSequence(tf.keras.utils.Sequence):
         self.label_scale = max(float(label_scale), 1e-8)
         self.shuffle = shuffle
         self.indices = list(range(len(self.pairs)))
+        self._matrix_cache = {} # <-- ADICIONE ESTA LINHA PARA O CACHE
         self.on_epoch_end()
 
     def __len__(self) -> int:
@@ -57,7 +60,7 @@ class SiamesePairSequence(tf.keras.utils.Sequence):
     def on_epoch_end(self) -> None:
         if self.shuffle:
             random.shuffle(self.indices)
-
+'''
     def _load_matrix(self, left_index: int, right_index: int) -> np.ndarray:
         left_sample = self.dataset[left_index]
         right_sample = self.dataset[right_index]
@@ -66,7 +69,7 @@ class SiamesePairSequence(tf.keras.utils.Sequence):
             right_sample.image_array,
         )
         return distances.astype(np.float32)
-
+''' 
     @staticmethod
     def _pad_matrices(matrices: List[np.ndarray]) -> np.ndarray:
         max_height = max(matrix.shape[0] for matrix in matrices)
@@ -294,6 +297,12 @@ Examples:
     fit_kwargs = {"epochs": args.epochs, "verbose": 1}
     if val_sequence is not None:
         fit_kwargs["validation_data"] = val_sequence
+
+    fit_kwargs.update({
+    "workers": 8,                # Usa 4 núcleos de CPU apenas para fatiar matrizes em paralelo
+    "use_multiprocessing": True, # Ativa multiprocessamento para contornar o GIL do Python
+    "max_queue_size": 10         # Deixa até 10 batches pré-fatiados prontos na fila da GPU
+    })
 
     model.fit(train_sequence, **fit_kwargs)
     model.save(head_path)
