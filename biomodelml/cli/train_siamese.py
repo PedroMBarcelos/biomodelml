@@ -43,7 +43,6 @@ class SiamesePairSequence(tf.keras.utils.Sequence):
         shuffle: bool = True,
         **kwargs
     ):
-        super().__init__(**kwargs)
         self.dataset = dataset
         self.pairs = list(pairs)
         self.variant = variant
@@ -60,7 +59,7 @@ class SiamesePairSequence(tf.keras.utils.Sequence):
     def on_epoch_end(self) -> None:
         if self.shuffle:
             random.shuffle(self.indices)
-'''
+    '''
     def _load_matrix(self, left_index: int, right_index: int) -> np.ndarray:
         left_sample = self.dataset[left_index]
         right_sample = self.dataset[right_index]
@@ -69,7 +68,29 @@ class SiamesePairSequence(tf.keras.utils.Sequence):
             right_sample.image_array,
         )
         return distances.astype(np.float32)
-''' 
+    '''
+    def _load_matrix(self, left_index: int, right_index: int) -> np.ndarray:
+        # Cria uma chave única para o par
+        cache_key = (left_index, right_index)
+        
+        # Se o par já foi fatiado antes, devolve direto da memória RAM
+        if cache_key in self._matrix_cache:
+            return self._matrix_cache[cache_key]
+            
+        # Se não estiver no cache (Época 1), faz o cálculo pesado original
+        left_sample = self.dataset[left_index]
+        right_sample = self.dataset[right_index]
+        distances, _ = self.variant._window_distance_matrix_from_arrays(
+            left_sample.image_array,
+            right_sample.image_array,
+        )
+        
+        final_matrix = distances.astype(np.float32)
+        
+        # Salva no cache para as próximas épocas
+        self._matrix_cache[cache_key] = final_matrix
+        return final_matrix
+    
     @staticmethod
     def _pad_matrices(matrices: List[np.ndarray]) -> np.ndarray:
         max_height = max(matrix.shape[0] for matrix in matrices)
