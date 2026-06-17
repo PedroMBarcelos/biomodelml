@@ -24,6 +24,14 @@ from biomodelml.variants.siamese_sliding_window import (
 )
 
 
+MAX_CORES = 12
+
+os.environ["OMP_NUM_THREADS"] = str(MAX_CORES)
+os.environ["MKL_NUM_THREADS"] = str(MAX_CORES)
+os.environ["OPENBLAS_NUM_THREADS"] = str(MAX_CORES)
+
+tf.config.threading.set_intra_op_parallelism_threads(MAX_CORES)
+tf.config.threading.set_inter_op_parallelism_threads(MAX_CORES)
 @dataclass(frozen=True)
 class PairExample:
     left_index: int
@@ -314,30 +322,54 @@ Examples:
         for i in range(len(train_sequence)):
             yield train_sequence[i]
 
-    # Criamos o dataset garantindo assinaturas flexíveis (None) para as matrizes
-    train_dataset = tf.data.Dataset.from_generator(
-        train_gen,
-        output_signature=(
-            tf.TensorSpec(shape=(None, None, None, 1), dtype=tf.float32), # [Batch, Altura, Largura, Canal]
-            tf.TensorSpec(shape=(None, 1), dtype=tf.float32)              # [Batch, Label]
+    num_batches = len(train_sequence)
+    train_indices_dataset = tf.data.Dataset.range(num_batches)
+
+    # 2. Função wrapper que será disparada em paralelo por vários cores
+    def load_batch_py(batch_idx):
+        # Converte o tensor do TF para um inteiro puro do Python
+        idx = int(batch_idx.numpy() if hasattr(batch_idx, "numpy") else batch_idx)
+        x, y = train_sequence[idx]
+        return x.astype(np.float32), y.astype(np.float32)
+
+    def load_batch_tf(batch_idx):
+        # Envelopa a função Python para o ecossistema do TensorFlow
+        x, y = tf.py_function(
+            func=load_batch_py,
+            inp=[batch_idx],
+            Tout=[tf.float32, tf.float32]
         )
+        # Define as assinaturas dinâmicas para o Keras aceitar os tamanhos variados
+        x.set_shape([None, None, None, 1])
+        y.set_shape([None, 1])
+        return x, y
+
+    # O SEGREDO: num_parallel_calls ativa os múltiplos núcleos de CPU de verdade!
+    train_dataset = train_indices_dataset.map(
+        load_batch_tf,
+        num_parallel_calls=tf.data.AUTOTUNE
     )
-    # Prefetch ativa o multi-threading de CPU em segundo plano
+    
+    # Adiciona o buffer de prefetch para alimentar a GPU sem travar
     train_dataset = train_dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
 
-    # 2. Gerador para o Dataset de Validação (se existir)
+    # 3. Repete o processo para validação (se houver)
     if val_sequence is not None:
-        def val_gen():
-            for i in range(len(val_sequence)):
-                yield val_sequence[i]
+        val_indices_dataset = tf.data.Dataset.range(len(val_sequence))
         
-        val_dataset = tf.data.Dataset.from_generator(
-            val_gen,
-            output_signature=(
-                tf.TensorSpec(shape=(None, None, None, 1), dtype=tf.float32),
-                tf.TensorSpec(shape=(None, 1), dtype=tf.float32)
-            )
-        ).prefetch(buffer_size=tf.data.AUTOTUNE)
+        def load_val_batch_py(batch_idx):
+            idx = int(batch_idx.numpy() if hasattr(batch_idx, "numpy") else batch_idx)
+            x, y = val_sequence[idx]
+            return x.astype(np.float32), y.astype(np.float32)
+
+        def load_val_batch_tf(batch_idx):
+            x, y = tf.py_function(func=load_val_batch_py, inp=[batch_idx], Tout=[tf.float32, tf.float32])
+            x.set_shape([None, None, None, 1])
+            y.set_shape([None, 1])
+            return x, y
+
+        val_dataset = val_indices_dataset.map(load_val_batch_tf, num_parallel_calls=tf.data.AUTOTUNE)
+        val_dataset = val_dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
     else:
         val_dataset = None
 
