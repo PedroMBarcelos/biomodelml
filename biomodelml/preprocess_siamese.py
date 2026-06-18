@@ -5,7 +5,6 @@ import argparse
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor
 
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
@@ -20,7 +19,7 @@ def is_window_informative(window: np.ndarray, threshold: float = 0.85) -> bool:
     return zero_ratio < threshold
 
 def main():
-    parser = argparse.ArgumentParser(description="Pré-processamento Otimizado Siamese Multi-Core")
+    parser = argparse.ArgumentParser(description="Pré-processamento Otimizado Siamese")
     parser.add_argument("dataset_root", help="Diretório images_output2/")
     parser.add_argument("sequence_type", choices=["N", "P"], help="Tipo de sequência (N ou P)")
     parser.add_argument("--window-size", type=int, default=200, help="Tamanho da janela")
@@ -29,7 +28,6 @@ def main():
     parser.add_argument("--sparsity-threshold", type=float, default=0.85, help="Filtro de descarte")
     parser.add_argument("--output-dir", default="preprocessed_data", help="Onde salvar")
     parser.add_argument("--shard-size", type=int, default=2000, help="Tamanho do bloco ampliado")
-    parser.add_argument("--workers", type=int, default=12, help="Número de núcleos de CPU")
     
     args = parser.parse_args()
     
@@ -55,11 +53,9 @@ def main():
     if label_scale <= 0: label_scale = 1.0
 
     # --- DICIONÁRIO DE CACHE DE IMAGENS ---
-    # Evita abrir o mesmo arquivo do disco repetidamente
     image_cache = {}
     print("Pré-carregando e processando geometria das imagens exclusivas na RAM...")
     
-    # Coleta todas as imagens únicas necessárias
     unique_indices = set([p.left_index for p in pairs] + [p.right_index for p in pairs])
     for idx in tqdm(unique_indices, desc="Filtrando Janelas"):
         sample = dataset[idx]
@@ -72,29 +68,23 @@ def main():
                 valid_windows.append(padded_win)
         image_cache[idx] = valid_windows
 
-    print("\nIniciando extração e cruzamento na GPU (Processamento em Paralelo)...")
+    # --- NOVO FLUXO SEQUENCIAL DIRETAMENTE PARA A GPU ---
+    print("\nIniciando extração e cruzamento na GPU (Fluxo Contínuo)...")
     
     shard_x, shard_y = [], []
     shard_count = 0
 
-    def process_pair(pair):
+    for pair in tqdm(pairs, desc="Processando Pares"):
         windows1 = image_cache[pair.left_index]
         windows2 = image_cache[pair.right_index]
         if not windows1 or not windows2:
-            return None
+            continue
         
-        # Cruzamento via multiplicação de tensores na GPU
+        # Multiplicação limpa na GPU sem concorrência de threads
         distances, _ = variant._window_distance_matrix_from_windows(windows1, windows2)
-        return distances.astype(np.float32), np.float32(pair.label / label_scale)
-
-    # Executa o processamento dos pares distribuindo pelas threads da CPU para alimentar a GPU continuamente
-    with ThreadPoolExecutor(max_workers=args.workers) as executor:
-        results = list(tqdm(executor.map(process_pair, pairs), total=len(pairs), desc="Processando Pares"))
-
-    print("\nEmpacotando e salvando Shards no disco...")
-    for res in results:
-        if res is None: continue
-        matrix, label = res
+        matrix = distances.astype(np.float32)
+        label = np.float32(pair.label / label_scale)
+        
         shard_x.append(matrix)
         shard_y.append(label)
         
@@ -112,7 +102,7 @@ def main():
             shard_x, shard_y = [], []
             shard_count += 1
 
-    # Trata o último bloco
+    # Trata o último bloco pendente
     if shard_x:
         max_height = max(m.shape[0] for m in shard_x)
         max_width = max(m.shape[1] for m in shard_x)
