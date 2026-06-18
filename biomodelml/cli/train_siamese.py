@@ -259,32 +259,32 @@ Examples:
     np.random.seed(args.seed)
     tf.random.set_seed(args.seed)
 
-    dataset = TrainingDataset(args.dataset_root, lazy_load=True)
-    pairs = _collect_pair_examples(dataset)
-    if not pairs:
-        raise RuntimeError("No pairwise training examples found in the manifest")
-
-    if args.max_pairs is not None:
-        rng = random.Random(args.seed)
-        pairs = list(pairs)
-        rng.shuffle(pairs)
-        pairs = pairs[: args.max_pairs]
-
-    train_pairs, val_pairs, test_pairs = _split_examples(
-        pairs,
-        train_ratio=args.train_ratio,
-        val_ratio=args.val_ratio,
-        test_ratio=args.test_ratio,
-        seed=args.seed,
-    )
-
-    if not train_pairs:
-        raise RuntimeError("Training split is empty")
-
-    label_scale = max(pair.label for pair in pairs)
-    if label_scale <= 0:
-        label_scale = 1.0
-
+    ##dataset = TrainingDataset(args.dataset_root, lazy_load=True)
+    ##pairs = _collect_pair_examples(dataset)
+    ##if not pairs:
+    ##    raise RuntimeError("No pairwise training examples found in the manifest")
+#
+    #if args.max_pairs is not None:
+    #    rng = random.Random(args.seed)
+    #    pairs = list(pairs)
+    #    rng.shuffle(pairs)
+    #    pairs = pairs[: args.max_pairs]
+#
+    #train_pairs, val_pairs, test_pairs = _split_examples(
+    #    pairs,
+    #    train_ratio=args.train_ratio,
+    #    val_ratio=args.val_ratio,
+    #    test_ratio=args.test_ratio,
+    #    seed=args.seed,
+    #)
+#
+    #if not train_pairs:
+    #    raise RuntimeError("Training split is empty")
+#
+    #label_scale = max(pair.label for pair in pairs)
+    #if label_scale <= 0:
+    #    label_scale = 1.0
+#
     variant = _build_variant(args)
     model = build_siamese_head_model(
         input_shape=(None, None, 1),
@@ -297,99 +297,63 @@ Examples:
         loss="mse",
         metrics=["mae"],
     )
+# ====================================================================
+    # CARREGAMENTO DE DADOS PRÉ-PROCESSADOS (SUBSTITUI OS GERADORES ANTIGOS)
+    # ====================================================================
+    import glob
 
-    train_sequence = SiamesePairSequence(
-        dataset=dataset,
-        pairs=train_pairs,
-        variant=variant,
+    # Define o caminho onde o preprocess_siamese.py salvou os shards
+    preprocess_dir = Path("preprocessed_data") / f"window_{args.window_size}_{args.sequence_type}"
+    
+    if not preprocess_dir.exists():
+        raise FileNotFoundError(
+            f"Pasta de pré-processamento não encontrada: {preprocess_dir}. "
+            f"Certifique-se de rodar o script preprocess_siamese.py primeiro!"
+        )
+
+    # 1. Carrega os metadados para sincronizar a escala da label
+    with open(preprocess_dir / "metadata.json", "r") as f:
+        meta = json.load(f)
+    label_scale = meta["label_scale"]
+
+    # 2. Encontra todos os arquivos de bloco (.npy)
+    x_files = sorted(glob.glob(str(preprocess_dir / "x_shard_*.npy")))
+    y_files = sorted(glob.glob(str(preprocess_dir / "y_shard_*.npy")))
+
+    print(f"\n[INFO] Encontrados {len(x_files)} blocos de dados. Carregando arrays...")
+
+    # 3. Une os blocos direto na memória RAM de forma instantânea
+    x_data = np.concatenate([np.load(f) for f in x_files], axis=0)
+    y_data = np.concatenate([np.load(f) for f in y_files], axis=0)
+
+    print(f"[SUCCESS] Dataset carregado!")
+    print(f" -> Formato das Matrizes de Entrada (X): {x_data.shape}")
+    print(f" -> Formato das Labels (Y): {y_data.shape}\n")
+
+    # ====================================================================
+    # CONFIGURAÇÃO DO FIT DE ALTA PERFORMANCE (SEM OVERHEAD DE CPU)
+    # ====================================================================
+    os.makedirs(args.output_dir, exist_ok=True)
+    head_path = Path(args.output_dir) / "siamese_head.keras"
+    config_path = Path(args.output_dir) / "siamese_head.json"
+
+    # Como a CPU está livre de fatiamento geométrico, você pode subir o 
+    # batch_size no CLI para 16 ou 32 para acelerar ainda mais o treino!
+    model.fit(
+        x_data,
+        y_data,
         batch_size=args.batch_size,
-        label_scale=label_scale,
-        shuffle=True,
-    )
-    val_sequence = (
-        SiamesePairSequence(
-            dataset=dataset,
-            pairs=val_pairs,
-            variant=variant,
-            batch_size=args.batch_size,
-            label_scale=label_scale,
-            shuffle=False,
-        )
-        if val_pairs
-        else None
-    )
-    def train_gen():
-        for i in range(len(train_sequence)):
-            yield train_sequence[i]
-
-    num_batches = len(train_sequence)
-    train_indices_dataset = tf.data.Dataset.range(num_batches)
-
-    # 2. Função wrapper que será disparada em paralelo por vários cores
-    def load_batch_py(batch_idx):
-        # Converte o tensor do TF para um inteiro puro do Python
-        idx = int(batch_idx.numpy() if hasattr(batch_idx, "numpy") else batch_idx)
-        x, y = train_sequence[idx]
-        return x.astype(np.float32), y.astype(np.float32)
-
-    def load_batch_tf(batch_idx):
-        # Envelopa a função Python para o ecossistema do TensorFlow
-        x, y = tf.py_function(
-            func=load_batch_py,
-            inp=[batch_idx],
-            Tout=[tf.float32, tf.float32]
-        )
-        # Define as assinaturas dinâmicas para o Keras aceitar os tamanhos variados
-        x.set_shape([None, None, None, 1])
-        y.set_shape([None, 1])
-        return x, y
-
-    # O SEGREDO: num_parallel_calls ativa os múltiplos núcleos de CPU de verdade!
-    train_dataset = train_indices_dataset.map(
-        load_batch_tf,
-        num_parallel_calls=tf.data.AUTOTUNE
+        epochs=args.epochs,
+        verbose=1,
+        validation_split=args.val_ratio, # O Keras separa o split de validação sozinho!
+        shuffle=True
     )
     
-    # Adiciona o buffer de prefetch para alimentar a GPU sem travar
-    train_dataset = train_dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
-
-    # 3. Repete o processo para validação (se houver)
-    if val_sequence is not None:
-        val_indices_dataset = tf.data.Dataset.range(len(val_sequence))
-        
-        def load_val_batch_py(batch_idx):
-            idx = int(batch_idx.numpy() if hasattr(batch_idx, "numpy") else batch_idx)
-            x, y = val_sequence[idx]
-            return x.astype(np.float32), y.astype(np.float32)
-
-        def load_val_batch_tf(batch_idx):
-            x, y = tf.py_function(func=load_val_batch_py, inp=[batch_idx], Tout=[tf.float32, tf.float32])
-            x.set_shape([None, None, None, 1])
-            y.set_shape([None, 1])
-            return x, y
-
-        val_dataset = val_indices_dataset.map(load_val_batch_tf, num_parallel_calls=tf.data.AUTOTUNE)
-        val_dataset = val_dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
-    else:
-        val_dataset = None
-
-    # ====================================================================
-    # CONFIGURAÇÃO DO FIT E SALVAMENTO
-    # ====================================================================
-    os.makedirs(args.output_dir, exist_ok=True)
-    head_path = Path(args.output_dir) / "siamese_head.keras"
-    config_path = Path(args.output_dir) / "siamese_head.json"
-
-    fit_kwargs = {"epochs": args.epochs, "verbose": 1}
-
-    # Passamos o dataset do tf.data em vez da Sequence crua
-    if val_dataset is not None:
-        fit_kwargs["validation_data"] = val_dataset
-
-    model.fit(train_dataset, **fit_kwargs)
     model.save(head_path)
-    # ====================================================================
 
+    # ====================================================================
+    # SALVAMENTO DAS CONFIGURAÇÕES FINAIS
+    # ====================================================================
     config = {
         "distance_scale": float(label_scale),
         "window_size": args.window_size,
@@ -402,52 +366,15 @@ Examples:
         "epochs": args.epochs,
         "batch_size": args.batch_size,
         "learning_rate": args.learning_rate,
-        "train_pairs": len(train_pairs),
-        "val_pairs": len(val_pairs),
-        "test_pairs": len(test_pairs),
+        "train_pairs": int(x_data.shape[0]),
         "sequence_type": args.sequence_type,
     }
     with open(config_path, "w") as handle:
         json.dump(config, handle, indent=2)
 
-    print(f"Saved trained head to {head_path}")
+    print(f"\nSaved trained head to {head_path}")
     print(f"Saved training config to {config_path}")
-'''
-    os.makedirs(args.output_dir, exist_ok=True)
-    head_path = Path(args.output_dir) / "siamese_head.keras"
-    config_path = Path(args.output_dir) / "siamese_head.json"
 
-    fit_kwargs = {"epochs": args.epochs, "verbose": 1}
-
-    if val_sequence is not None:
-        fit_kwargs["validation_data"] = val_sequence
-
-    model.fit(train_sequence, **fit_kwargs)
-    model.save(head_path)
-
-    config = {
-        "distance_scale": float(label_scale),
-        "window_size": args.window_size,
-        "stride": args.stride,
-        "top_k": args.top_k,
-        "feature_input_shape": list(args.feature_input_shape),
-        "conv_filters": list(variant._head_conv_filters),
-        "dense_units": list(variant._head_dense_units),
-        "dropout": variant._head_dropout,
-        "epochs": args.epochs,
-        "batch_size": args.batch_size,
-        "learning_rate": args.learning_rate,
-        "train_pairs": len(train_pairs),
-        "val_pairs": len(val_pairs),
-        "test_pairs": len(test_pairs),
-        "sequence_type": args.sequence_type,
-    }
-    with open(config_path, "w") as handle:
-        json.dump(config, handle, indent=2)
-
-    print(f"Saved trained head to {head_path}")
-    print(f"Saved training config to {config_path}")
-'''
 
 if __name__ == "__main__":
     main()
